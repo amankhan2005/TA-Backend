@@ -117,9 +117,7 @@ See `.env.example` for all required variables.
 
 ## Default Credentials (after `npm run seed`)
 
-| Role | Email | Password |
-|------|-------|----------|
-| Super Admin | admin@teacherattendance.com | Admin@1234 |
+ 
 
 > ⚠️ Change the Super Admin password immediately after first login.
 
