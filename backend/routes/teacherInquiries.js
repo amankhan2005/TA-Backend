@@ -1,0 +1,12 @@
+const express=require('express');const router=express.Router();
+const {body}=require('express-validator');
+const {validate}=require('../middleware/validate');
+const {protect}=require('../middleware/auth');
+const {requireActiveSchool}=require('../middleware/subscription');
+const {submitInquiry,getMyInquiries,getSchoolInquiries,replyInquiry,deleteInquiry}=require('../controllers/teacherInquiryController');
+router.post('/',protect('teacher'),requireActiveSchool,[body('category').isIn(['attendance_issue','leave_request','technical_issue','general_support','other']),body('subject').trim().notEmpty().isLength({max:200}),body('message').trim().notEmpty().isLength({max:2000}),validate],submitInquiry);
+router.get('/my',protect('teacher'),requireActiveSchool,getMyInquiries);
+router.get('/',protect('schoolAdmin'),requireActiveSchool,getSchoolInquiries);
+router.patch('/:id',protect('schoolAdmin'),requireActiveSchool,[body('status').optional().isIn(['open','in_progress','resolved','closed']),body('adminReply').optional().isString().isLength({max:2000}),validate],replyInquiry);
+router.delete('/:id',protect('schoolAdmin'),requireActiveSchool,deleteInquiry);
+module.exports=router;

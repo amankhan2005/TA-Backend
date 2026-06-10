@@ -1,0 +1,40 @@
+{
+  "name": "teacherattendance-backend",
+  "version": "1.0.0",
+  "description": "TeacherAttendance — Multi-Tenant SaaS School Attendance Management Backend",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "nodemon server.js",
+    "seed": "node utils/seed.js"
+  },
+  "dependencies": {
+    "bcryptjs": "^2.4.3",
+    "cloudinary": "^1.41.3",
+    "cors": "^2.8.6",
+    "dotenv": "^16.6.1",
+    "express": "^4.22.2",
+    "express-rate-limit": "^7.5.1",
+    "express-validator": "^7.3.2",
+    "helmet": "^7.2.0",
+    "jsonwebtoken": "^9.0.3",
+    "mongoose": "^8.23.1",
+    "multer": "^1.4.5-lts.1",
+    "multer-storage-cloudinary": "^4.0.0",
+    "resend": "^2.1.0",
+    "uuid": "^9.0.1"
+  },
+  "devDependencies": {
+    "mongodb-memory-server": "^11.2.0",
+    "nodemon": "^3.0.2"
+  },
+  "keywords": [
+    "teacherattendance",
+    "saas",
+    "attendance",
+    "kenya",
+    "schools"
+  ],
+  "author": "",
+  "license": "ISC"
+}
