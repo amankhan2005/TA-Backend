@@ -35,9 +35,15 @@ const allowedOrigins = [
   process.env.FRONTEND_SUPER_ADMIN_URL,
   process.env.FRONTEND_SCHOOL_ADMIN_URL,
   process.env.FRONTEND_WEBSITE_URL,
+   // Local
   'http://localhost:5173',
   'http://localhost:5174',
   'http://localhost:5175',
+
+  // Production
+  'https://teacherattendance.com',
+  'https://www.teacherattendance.com',
+
 ].filter(Boolean);
 
 // CORS Configuration
