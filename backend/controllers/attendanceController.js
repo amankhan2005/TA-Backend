@@ -1,16 +1,17 @@
-const AttendanceRecord = require('../models/AttendanceRecord');
+ const AttendanceRecord = require('../models/AttendanceRecord');
 const QRSession        = require('../models/QRSession');
 const SchoolSettings   = require('../models/SchoolSettings');
 const Teacher          = require('../models/Teacher');
-const { isWithinRadius } = require('../utils/gps');
+const { validateAttendanceGps } = require('../utils/gps');
 const { getTodayDate }   = require('../utils/token');
 const { logEvent }       = require('../utils/audit');
+const { cloudinary }     = require('../config/cloudinary');
 const crypto = require('crypto');
 
 // ─── Shared: holiday / weekly-off gate ───────────────────────────────────────
 function holidayGate(settings, today) {
   if (settings.weeklyOffDays && settings.weeklyOffDays.length > 0) {
-    // today is "YYYY-MM-DD"; append T00:00:00Z so UTC day matches local config
+    // today is "YYYY-MM-DD"; build a local date and read its weekday
     const [_y,_m,_d]=today.split('-').map(Number); const dow=new Date(_y,_m-1,_d).getDay();
     if (settings.weeklyOffDays.includes(dow)) {
       const DAYS = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
@@ -24,14 +25,35 @@ function holidayGate(settings, today) {
   return null; // not blocked
 }
 
+// ─── Shared: normalize WiFi identifiers ──────────────────────────────────────
+const normSSID  = (v) => {
+  if (v == null) return null;
+  let s = String(v).trim();
+  if (s.startsWith('"') && s.endsWith('"')) s = s.slice(1, -1); // Android wraps SSID in quotes
+  return s.length ? s : null;
+};
+const normBSSID = (v) => {
+  if (v == null) return null;
+  const s = String(v).trim().toLowerCase();
+  // Android returns these placeholders when it can't read the real BSSID
+  if (!s || s === '02:00:00:00:00:00' || s === '00:00:00:00:00:00') return null;
+  return s;
+};
+
 // ─── MARK WIFI ATTENDANCE ────────────────────────────────────────────────────
-// wifiSSID and gatewayIp are intentionally optional.
-// iOS/Expo cannot retrieve the WiFi SSID without a native entitlement.
-// When they are null the backend skips those checks and relies on GPS only.
+// Conditions (all must pass on Android):
+//   1. Connected to the authorized school WiFi (SSID + BSSID match)
+//   2. Inside the allowed GPS radius (with bounded accuracy tolerance)
+//   3. Precise location (enforced client-side; backend enforces accuracy gate)
+// iOS may send no SSID/BSSID (platform-limited) and falls back to GPS-only.
 exports.markWifiAttendance = async (req, res) => {
   try {
     const { schoolId, userId: teacherId } = req.user;
-    const { wifiSSID, gatewayIp, gpsLatitude, gpsLongitude, deviceId, hasVPN, hasMockGPS } = req.body;
+    const {
+      wifiSSID, wifiBSSID, gpsLatitude, gpsLongitude, gpsAccuracy,
+      deviceId, hasVPN, hasMockGPS, platform,
+    } = req.body;
+    const plat = String(platform || 'android').toLowerCase();
 
     const today    = getTodayDate();
     const settings = await SchoolSettings.findOne({ schoolId });
@@ -51,35 +73,45 @@ exports.markWifiAttendance = async (req, res) => {
     if (hasVPN === true)     errors.push({ check: 'vpn',     message: 'VPN detected. Disable VPN and try again.' });
     if (hasMockGPS === true) errors.push({ check: 'mockGps', message: 'Mock GPS detected. Disable location spoofing apps.' });
 
-    // SSID — only compare when both sides have a value (iOS sends null → skip)
-    if (wifiSSID && settings.wifiSSID && wifiSSID !== settings.wifiSSID)
-      errors.push({ check: 'wifi', message: `Not connected to school WiFi (${settings.wifiSSID}).` });
+    // ── WiFi (SSID + BSSID) ─────────────────────────────────────────────────
+    // No silent skip and no null-bypass: on Android the WiFi check is mandatory.
+    const ssid   = normSSID(wifiSSID);
+    const bssid  = normBSSID(wifiBSSID);
+    const cSsid  = normSSID(settings.wifiSSID);
+    const cBssid = normBSSID(settings.wifiBSSID);
 
-    // Gateway — same: only compare when both sides have a value
-    if (gatewayIp && settings.gatewayIp && gatewayIp !== settings.gatewayIp)
-      errors.push({ check: 'gateway', message: 'Gateway IP mismatch. You may be on a hotspot.' });
-
-    // GPS — always required (primary security layer on iOS)
-    if (!settings.gpsLatitude || !settings.gpsLongitude) {
-      errors.push({ check: 'gps', message: 'School GPS location not configured yet. Contact your admin.' });
-    } else {
-      const lat = parseFloat(gpsLatitude);
-      const lon = parseFloat(gpsLongitude);
-      if (isNaN(lat) || isNaN(lon)) {
-        errors.push({ check: 'gps', message: 'Invalid GPS coordinates received.' });
+    if (plat !== 'ios') {
+      if (!cSsid && !cBssid) {
+        errors.push({ check: 'wifi', message: 'School WiFi not configured yet. Contact your admin.' });
+      } else if (!ssid && !bssid) {
+        errors.push({ check: 'wifi', message: 'Unable to verify school WiFi. Please reconnect and try again.' });
       } else {
-        const { withinRadius, distance } = isWithinRadius(
-          lat, lon, settings.gpsLatitude, settings.gpsLongitude, settings.gpsRadius
-        );
-        if (!withinRadius)
-          errors.push({ check: 'gps', message: `You are ${distance}m from school. Must be within ${settings.gpsRadius}m.` });
+        let match = true;
+        if (cBssid) match = match && bssid === cBssid;   // BSSID is authoritative when configured
+        if (cSsid)  match = match && ssid === cSsid;
+        if (!match) errors.push({ check: 'wifi', message: 'You are not connected to the authorized school WiFi.' });
       }
     }
 
+    // ── GPS (range + accuracy gate + bounded tolerance) ─────────────────────
+    const gps = validateAttendanceGps(settings, { gpsLatitude, gpsLongitude, gpsAccuracy });
+    if (!gps.ok) errors.push({ check: 'gps', message: gps.reason });
+
     if (errors.length > 0) {
       await logEvent(req, 'attendance.wifi.failed_validation', {
-        targetType: 'teacher', targetId: teacherId,
-        metadata: { date: today, failedChecks: errors.map(e => e.check) },
+        targetType: 'teacher', targetId: teacherId, status: 'failed',
+        metadata: {
+          date: today, mode: 'wifi',
+          failedChecks: errors.map(e => e.check),
+          reason:       errors.map(e => e.message).join(' | '),
+          teacherLat:   gpsLatitude  != null ? parseFloat(gpsLatitude)  : null,
+          teacherLon:   gpsLongitude != null ? parseFloat(gpsLongitude) : null,
+          schoolLat:    settings.gpsLatitude,
+          schoolLon:    settings.gpsLongitude,
+          distance:     gps.distance ?? null,
+          gpsAccuracy:  gps.accuracy ?? (gpsAccuracy != null ? parseFloat(gpsAccuracy) : null),
+          ssid, bssid, platform: plat,
+        },
       });
       return res.status(403).json({ success: false, message: 'Attendance validation failed.', errors });
     }
@@ -94,8 +126,9 @@ exports.markWifiAttendance = async (req, res) => {
       schoolId, school: teacher.school,
       teacher: teacherId, teacherId: teacherId.toString(),
       date: today, mode: 'wifi',
-      wifiSSID: wifiSSID || null, gatewayIp: gatewayIp || null,
-      gpsLatitude: parseFloat(gpsLatitude), gpsLongitude: parseFloat(gpsLongitude),
+      wifiSSID: ssid, wifiBSSID: bssid, gatewayIp: null,
+      gpsLatitude: gps.lat, gpsLongitude: gps.lon,
+      gpsAccuracy: gps.accuracy ?? null, distanceMeters: gps.distance ?? null,
       deviceId, isSuspicious, suspiciousReason,
     });
 
@@ -142,32 +175,67 @@ exports.getActiveQRSession = async (req, res) => {
 };
 
 // ─── MARK QR ATTENDANCE ──────────────────────────────────────────────────────
+// QR now ALSO enforces GPS range (anti-sharing): a shared QR scanned from outside
+// the school radius is rejected. Flow: scan QR → selfie → GPS fetched → range
+// checked → attendance marked. lat/lon/accuracy are saved on the record.
 exports.markQRAttendance = async (req, res) => {
+  // Selfie is uploaded by multer BEFORE this handler runs. If we later reject the
+  // attendance we delete the orphaned Cloudinary upload (best-effort).
+  const selfieUrl      = req.file ? req.file.path     : null;
+  const selfiePublicId = req.file ? req.file.filename : null;
+  const cleanupSelfie = async () => {
+    if (selfiePublicId) { try { await cloudinary.uploader.destroy(selfiePublicId); } catch (_) {} }
+  };
+
   try {
     const { schoolId, userId: teacherId } = req.user;
-    const { qrToken, deviceId } = req.body;
-    const selfieUrl       = req.file ? req.file.path     : null;
-    const selfiePublicId  = req.file ? req.file.filename : null;
+    const { qrToken, deviceId, gpsLatitude, gpsLongitude, gpsAccuracy } = req.body;
 
     if (!selfieUrl) return res.status(400).json({ success: false, message: 'Live selfie is required.' });
+    if (!qrToken)   { await cleanupSelfie(); return res.status(400).json({ success: false, message: 'QR token required.' }); }
+    if (gpsLatitude == null || gpsLongitude == null) {
+      await cleanupSelfie();
+      return res.status(400).json({ success: false, message: 'Location is required to mark QR attendance.' });
+    }
 
     const settings = await SchoolSettings.findOne({ schoolId });
-    if (!settings)                       return res.status(500).json({ success: false, message: 'School settings not configured.' });
-    if (!settings.qrAttendanceEnabled)   return res.status(403).json({ success: false, message: 'QR attendance is disabled.' });
+    if (!settings)                     { await cleanupSelfie(); return res.status(500).json({ success: false, message: 'School settings not configured.' }); }
+    if (!settings.qrAttendanceEnabled) { await cleanupSelfie(); return res.status(403).json({ success: false, message: 'QR attendance is disabled.' }); }
 
     const today = getTodayDate();
     const gate  = holidayGate(settings, today);
-    if (gate) return res.status(403).json({ success: false, message: gate });
+    if (gate) { await cleanupSelfie(); return res.status(403).json({ success: false, message: gate }); }
 
     const existing = await AttendanceRecord.findOne({ schoolId, teacherId: teacherId.toString(), date: today });
-    if (existing) return res.status(409).json({ success: false, message: 'Attendance already marked for today.' });
+    if (existing) { await cleanupSelfie(); return res.status(409).json({ success: false, message: 'Attendance already marked for today.' }); }
 
     const session = await QRSession.findOne({ schoolId, token: qrToken, date: today });
-    if (!session)          return res.status(400).json({ success: false, message: 'Invalid QR code.' });
-    if (!session.isValid()) return res.status(400).json({ success: false, message: 'QR code expired. Ask admin to regenerate.' });
+    if (!session)           { await cleanupSelfie(); return res.status(400).json({ success: false, message: 'Invalid QR code.' }); }
+    if (!session.isValid()) { await cleanupSelfie(); return res.status(400).json({ success: false, message: 'QR code expired. Ask admin to regenerate.' }); }
+
+    // ── GPS range protection (anti-sharing) — same logic as WiFi attendance ──
+    const gps = validateAttendanceGps(settings, { gpsLatitude, gpsLongitude, gpsAccuracy });
+    if (!gps.ok) {
+      await logEvent(req, 'attendance.qr.failed_validation', {
+        targetType: 'teacher', targetId: teacherId, status: 'failed',
+        metadata: {
+          date: today, mode: 'qr',
+          failedChecks: ['gps'],
+          reason:      gps.reason,
+          teacherLat:  gpsLatitude  != null ? parseFloat(gpsLatitude)  : null,
+          teacherLon:  gpsLongitude != null ? parseFloat(gpsLongitude) : null,
+          schoolLat:   settings.gpsLatitude,
+          schoolLon:   settings.gpsLongitude,
+          distance:    gps.distance ?? null,
+          gpsAccuracy: gps.accuracy ?? (gpsAccuracy != null ? parseFloat(gpsAccuracy) : null),
+        },
+      });
+      await cleanupSelfie();
+      return res.status(403).json({ success: false, message: gps.reason, errors: [{ check: 'gps', message: gps.reason }] });
+    }
 
     const teacher = await Teacher.findById(teacherId);
-    if (!teacher) return res.status(404).json({ success: false, message: 'Teacher not found.' });
+    if (!teacher) { await cleanupSelfie(); return res.status(404).json({ success: false, message: 'Teacher not found.' }); }
 
     let isSuspicious = false, suspiciousReason = null;
     if (teacher.deviceId && deviceId && teacher.deviceId !== deviceId) {
@@ -178,6 +246,8 @@ exports.markQRAttendance = async (req, res) => {
       schoolId, school: teacher.school,
       teacher: teacherId, teacherId: teacherId.toString(),
       date: today, mode: 'qr', selfieUrl, selfiePublicId, qrSession: session._id,
+      gpsLatitude: gps.lat, gpsLongitude: gps.lon,
+      gpsAccuracy: gps.accuracy ?? null, distanceMeters: gps.distance ?? null,
       deviceId, isSuspicious, suspiciousReason,
     });
 
@@ -185,6 +255,7 @@ exports.markQRAttendance = async (req, res) => {
 
     res.status(201).json({ success: true, message: 'Attendance marked successfully.', record });
   } catch (err) {
+    await cleanupSelfie();
     if (err.code === 11000) return res.status(409).json({ success: false, message: 'Attendance already marked for today.' });
     res.status(500).json({ success: false, message: err.message });
   }

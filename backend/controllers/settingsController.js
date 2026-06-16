@@ -13,13 +13,15 @@ exports.getSettings = async (req, res) => {
 exports.updateWifiSettings = async (req, res) => {
   try {
     const { schoolId } = req.user;
-    const { wifiSSID, gatewayIp, gpsLatitude, gpsLongitude, gpsRadius } = req.body;
+    const { wifiSSID, wifiBSSID, gatewayIp, gpsLatitude, gpsLongitude, gpsRadius } = req.body;
     const upd = {};
-    if (wifiSSID    !== undefined) upd.wifiSSID    = wifiSSID;
-    if (gatewayIp   !== undefined) upd.gatewayIp   = gatewayIp;
-    if (gpsLatitude !== undefined) upd.gpsLatitude  = gpsLatitude;
-    if (gpsLongitude!== undefined) upd.gpsLongitude = gpsLongitude;
-    if (gpsRadius   !== undefined) upd.gpsRadius    = gpsRadius;
+    if (wifiSSID     !== undefined) upd.wifiSSID     = wifiSSID;
+    // BSSID normalised to lower-case so device-side comparison is consistent
+    if (wifiBSSID    !== undefined) upd.wifiBSSID    = wifiBSSID ? String(wifiBSSID).trim().toLowerCase() : null;
+    if (gatewayIp    !== undefined) upd.gatewayIp    = gatewayIp;
+    if (gpsLatitude  !== undefined) upd.gpsLatitude  = gpsLatitude;
+    if (gpsLongitude !== undefined) upd.gpsLongitude = gpsLongitude;
+    if (gpsRadius    !== undefined) upd.gpsRadius    = gpsRadius;
     const s = await SchoolSettings.findOneAndUpdate({ schoolId }, { $set: upd }, { new: true, runValidators: true });
     if (!s) return res.status(404).json({ success: false, message: 'Settings not found.' });
     await logEvent(req, 'settings.wifi.updated', { targetType:'settings', targetId:schoolId, metadata:{ fields:Object.keys(upd) } });

@@ -18,7 +18,9 @@ const auditLogSchema = new mongoose.Schema(
     // ── Who did it ─────────────────────────────────────────────────────────
     actorId:    { type: String, required: true },          // userId (string form)
     actorEmail: { type: String, required: true },
-    actorRole:  { type: String, required: true, enum: ['superAdmin', 'schoolAdmin', 'system'] },
+    // 'teacher' added — teachers trigger attendance audit events (failed validation,
+    // suspicious device). Without it every teacher-initiated audit write was rejected.
+    actorRole:  { type: String, required: true, enum: ['superAdmin', 'schoolAdmin', 'teacher', 'system'] },
 
     // ── School scope (null = platform-level superAdmin action) ─────────────
     schoolId:   { type: String, default: null, index: true },
@@ -43,6 +45,7 @@ const auditLogSchema = new mongoose.Schema(
         'school.status.changed',         // activate / deactivate / suspend
         'school.plan.changed',           // subscription plan updated
         'school.logo.updated',
+        'school.details.updated',        // (added) emitted by schoolController
 
         // Teacher management (School Admin)
         'teacher.created',
@@ -50,11 +53,15 @@ const auditLogSchema = new mongoose.Schema(
         'teacher.deleted',
         'teacher.password.reset',
         'teacher.device.reset',
+        'teacher.deletion.approved',     // (added) emitted by teacher deletion flow
+        'teacher.deletion.rejected',     // (added) emitted by teacher deletion flow
 
         // Settings (School Admin)
         'settings.wifi.updated',
         'settings.qr.updated',
         'settings.mode.toggled',
+        'settings.weeklyoff.updated',    // (added) emitted by settingsController
+        'settings.support.updated',      // (added) emitted by settingsController
 
         // Subscription Plans (Super Admin)
         'plan.created',
@@ -64,11 +71,15 @@ const auditLogSchema = new mongoose.Schema(
         // Attendance security events
         'attendance.suspicious_flagged',
         'attendance.wifi.failed_validation',
+        'attendance.qr.failed_validation',  // (added) QR range/anti-sharing failures
+
+        // Inquiries
+        'inquiry.status.changed',
+        'inquiry.deleted',
+        'teacher_inquiry.updated',       // (added) emitted by teacher inquiry flow
 
         // App Version Management (Super Admin)
         'appversion.created',
-  'inquiry.status.changed',
-  'inquiry.deleted',
         'appversion.updated',
         'appversion.deleted',
       ],

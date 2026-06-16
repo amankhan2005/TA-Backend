@@ -10,17 +10,20 @@ const {
   getTodayAttendance, getMyAttendance, getMonthlyReport, getDailyReport, getSuspiciousActivity,
 } = require('../controllers/attendanceController');
 
-// wifiSSID / gatewayIp intentionally NOT required — iOS cannot retrieve them
+// WiFi attendance — GPS is mandatory; SSID/BSSID enforced in controller (platform-aware).
 router.post('/wifi', protect('teacher'), requireActiveSchool, [
   body('gpsLatitude').isFloat().withMessage('Valid GPS latitude required.'),
   body('gpsLongitude').isFloat().withMessage('Valid GPS longitude required.'),
+  body('gpsAccuracy').optional({ nullable: true }).isFloat({ min: 0 }),
   validate,
 ], markWifiAttendance);
 
-router.post('/qr', protect('teacher'), requireActiveSchool, uploadSelfie.single('selfie'), [
-  body('qrToken').notEmpty().withMessage('QR token required.'),
-  validate,
-], markQRAttendance);
+// QR attendance — multipart (selfie). The selfie is uploaded to Cloudinary by multer
+// DURING body parsing, so we intentionally do NOT use the short-circuiting express-validator
+// `validate` middleware here. All field/GPS validation happens inside markQRAttendance,
+// which deletes the orphaned upload on any rejection. GPS is required for the
+// range / anti-sharing check.
+router.post('/qr', protect('teacher'), requireActiveSchool, uploadSelfie.single('selfie'), markQRAttendance);
 
 router.get('/my-history', protect('teacher'), requireActiveSchool, getMyAttendance);
 

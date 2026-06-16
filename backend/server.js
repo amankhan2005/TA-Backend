@@ -1,4 +1,4 @@
-require('dotenv').config();
+ require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
@@ -19,6 +19,9 @@ const inquiryRoutes       = require('./routes/inquiries');
 const teacherInquiryRoutes = require('./routes/teacherInquiries');
 
 const app = express();
+
+ 
+app.set('trust proxy', 1);
 
 // ─────────────────────────────────────────────────────────────
 // Connect Database

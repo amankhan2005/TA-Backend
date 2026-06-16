@@ -14,6 +14,12 @@ const schoolSettingsSchema = new mongoose.Schema({
   wifiAttendanceEnabled: { type: Boolean, default: true  },
   qrAttendanceEnabled:   { type: Boolean, default: true  },
   wifiSSID:              { type: String,  default: null   },
+  // BSSID = the access point's MAC address (e.g. "a4:2b:b0:11:22:33").
+  // Uniquely identifies the physical router, so it can't be spoofed by simply
+  // naming another network the same SSID. Stored lower-case for comparison.
+  wifiBSSID:             { type: String,  default: null   },
+  // gatewayIp kept for backward compatibility with older records; no longer
+  // used for validation (the gateway IP is not reliably retrievable on-device).
   gatewayIp:             { type: String,  default: null   },
   gpsLatitude:           { type: Number,  default: null   },
   gpsLongitude:          { type: Number,  default: null   },

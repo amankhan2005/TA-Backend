@@ -12,9 +12,14 @@ const attendanceRecordSchema = new mongoose.Schema({
 
   // WiFi mode data
   wifiSSID: { type: String, default: null },
-  gatewayIp: { type: String, default: null },
+  wifiBSSID: { type: String, default: null },     // access-point MAC actually connected to
+  gatewayIp: { type: String, default: null },     // legacy, no longer validated
+
+  // GPS data — now captured for BOTH wifi and qr modes
   gpsLatitude: { type: Number, default: null },
   gpsLongitude: { type: Number, default: null },
+  gpsAccuracy: { type: Number, default: null },   // device-reported horizontal accuracy (m)
+  distanceMeters: { type: Number, default: null }, // computed distance from school at mark time
 
   // QR mode data
   selfieUrl: { type: String, default: null },
