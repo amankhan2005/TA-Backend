@@ -22,8 +22,7 @@ const isWithinRadius = (teacherLat, teacherLon, schoolLat, schoolLon, radiusMete
 
 // Maximum device-reported accuracy we will accept (meters). A fix worse than this
 // is treated as untrustworthy (typical of "Approximate" location / weak signal).
-const GPS_ACCURACY_MAX = 200;
-// Maximum tolerance added to the school radius to forgive genuine boundary jitter.
+const GPS_ACCURACY_MAX = 100;
 const GPS_BUFFER_MAX = 50;
 
 /**
