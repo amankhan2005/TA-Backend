@@ -1,147 +1,260 @@
- const AttendanceRecord = require('../models/AttendanceRecord');
-const QRSession        = require('../models/QRSession');
-const SchoolSettings   = require('../models/SchoolSettings');
-const Teacher          = require('../models/Teacher');
+const AttendanceRecord = require('../models/AttendanceRecord');
+const QRSession = require('../models/QRSession');
+const SchoolSettings = require('../models/SchoolSettings');
+const Teacher = require('../models/Teacher');
 const { validateAttendanceGps } = require('../utils/gps');
-const { getTodayDate }   = require('../utils/token');
-const { logEvent }       = require('../utils/audit');
-const { cloudinary }     = require('../config/cloudinary');
+const { getTodayDate } = require('../utils/token');
+const { logEvent } = require('../utils/audit');
+const { cloudinary } = require('../config/cloudinary');
 const crypto = require('crypto');
 
 // ─── Shared: holiday / weekly-off gate ───────────────────────────────────────
 function holidayGate(settings, today) {
   if (settings.weeklyOffDays && settings.weeklyOffDays.length > 0) {
-    // today is "YYYY-MM-DD"; build a local date and read its weekday
-    const [_y,_m,_d]=today.split('-').map(Number); const dow=new Date(_y,_m-1,_d).getDay();
+    const [_y, _m, _d] = today.split('-').map(Number);
+    const dow = new Date(_y, _m - 1, _d).getDay();
     if (settings.weeklyOffDays.includes(dow)) {
-      const DAYS = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+      const DAYS = [
+        'Sunday',
+        'Monday',
+        'Tuesday',
+        'Wednesday',
+        'Thursday',
+        'Friday',
+        'Saturday',
+      ];
       return `Today is a weekly off day (${DAYS[dow]}). Attendance is not allowed.`;
     }
   }
   if (settings.holidays && settings.holidays.length > 0) {
-    const h = settings.holidays.find(h => h.date === today && h.isActive !== false);
+    const h = settings.holidays.find(
+      (h) => h.date === today && h.isActive !== false
+    );
     if (h) return `Today is a holiday (${h.name}). Attendance is not allowed.`;
   }
-  return null; // not blocked
+  return null;
 }
 
 // ─── Shared: normalize WiFi identifiers ──────────────────────────────────────
-const normSSID  = (v) => {
+const normSSID = (v) => {
   if (v == null) return null;
   let s = String(v).trim();
-  if (s.startsWith('"') && s.endsWith('"')) s = s.slice(1, -1); // Android wraps SSID in quotes
+  if (s.startsWith('"') && s.endsWith('"')) s = s.slice(1, -1);
   return s.length ? s : null;
 };
 const normBSSID = (v) => {
   if (v == null) return null;
   const s = String(v).trim().toLowerCase();
-  // Android returns these placeholders when it can't read the real BSSID
   if (!s || s === '02:00:00:00:00:00' || s === '00:00:00:00:00:00') return null;
   return s;
 };
 
 // ─── MARK WIFI ATTENDANCE ────────────────────────────────────────────────────
-// Conditions (all must pass on Android):
-//   1. Connected to the authorized school WiFi (SSID + BSSID match)
-//   2. Inside the allowed GPS radius (with bounded accuracy tolerance)
-//   3. Precise location (enforced client-side; backend enforces accuracy gate)
-// iOS may send no SSID/BSSID (platform-limited) and falls back to GPS-only.
 exports.markWifiAttendance = async (req, res) => {
   try {
     const { schoolId, userId: teacherId } = req.user;
     const {
-      wifiSSID, wifiBSSID, gpsLatitude, gpsLongitude, gpsAccuracy,
-      deviceId, hasVPN, hasMockGPS, platform,
+      wifiSSID,
+      wifiBSSID,
+      gpsLatitude,
+      gpsLongitude,
+      gpsAccuracy,
+      deviceId,
+      hasVPN,
+      hasMockGPS,
+      platform,
+      // Device diagnostics
+      deviceModel,
+      osName,
+      osVersion,
+      appVersion,
+      // GPS diagnostics
+      gpsPermissionStatus,
+      gpsAttempts,
+      gpsStartTime,
+      timestamp,
     } = req.body;
-    const plat = String(platform || 'android').toLowerCase();
 
-    const today    = getTodayDate();
+    const plat = String(platform || 'android').toLowerCase();
+    const today = getTodayDate();
+
     const settings = await SchoolSettings.findOne({ schoolId });
-    if (!settings) return res.status(500).json({ success: false, message: 'School settings not configured.' });
+    if (!settings)
+      return res
+        .status(500)
+        .json({ success: false, message: 'School settings not configured.' });
 
     if (!settings.wifiAttendanceEnabled)
-      return res.status(403).json({ success: false, message: 'WiFi attendance is disabled by your school admin.' });
+      return res.status(403).json({
+        success: false,
+        message: 'WiFi attendance is disabled by your school admin.',
+      });
 
     const gate = holidayGate(settings, today);
     if (gate) return res.status(403).json({ success: false, message: gate });
 
-    const existing = await AttendanceRecord.findOne({ schoolId, teacherId: teacherId.toString(), date: today });
-    if (existing) return res.status(409).json({ success: false, message: 'Attendance already marked for today.' });
+    const existing = await AttendanceRecord.findOne({
+      schoolId,
+      teacherId: teacherId.toString(),
+      date: today,
+    });
+    if (existing)
+      return res.status(409).json({
+        success: false,
+        message: 'Attendance already marked for today.',
+      });
 
     const errors = [];
 
-    if (hasVPN === true)     errors.push({ check: 'vpn',     message: 'VPN detected. Disable VPN and try again.' });
-    if (hasMockGPS === true) errors.push({ check: 'mockGps', message: 'Mock GPS detected. Disable location spoofing apps.' });
+    if (hasVPN === true)
+      errors.push({ check: 'vpn', message: 'VPN detected. Disable VPN and try again.' });
+    if (hasMockGPS === true)
+      errors.push({
+        check: 'mockGps',
+        message: 'Mock GPS detected. Disable location spoofing apps.',
+      });
 
     // ── WiFi (SSID + BSSID) ─────────────────────────────────────────────────
-    // No silent skip and no null-bypass: on Android the WiFi check is mandatory.
-    const ssid   = normSSID(wifiSSID);
-    const bssid  = normBSSID(wifiBSSID);
-    const cSsid  = normSSID(settings.wifiSSID);
+    const ssid = normSSID(wifiSSID);
+    const bssid = normBSSID(wifiBSSID);
+    const cSsid = normSSID(settings.wifiSSID);
     const cBssid = normBSSID(settings.wifiBSSID);
 
     if (plat !== 'ios') {
       if (!cSsid && !cBssid) {
-        errors.push({ check: 'wifi', message: 'School WiFi not configured yet. Contact your admin.' });
+        errors.push({
+          check: 'wifi',
+          message: 'School WiFi not configured yet. Contact your admin.',
+        });
       } else if (!ssid && !bssid) {
-        errors.push({ check: 'wifi', message: 'Unable to verify school WiFi. Please reconnect and try again.' });
+        errors.push({
+          check: 'wifi',
+          message: 'Unable to verify school WiFi. Please reconnect and try again.',
+        });
       } else {
         let match = true;
-        if (cBssid) match = match && bssid === cBssid;   // BSSID is authoritative when configured
-        if (cSsid)  match = match && ssid === cSsid;
-        if (!match) errors.push({ check: 'wifi', message: 'You are not connected to the authorized school WiFi.' });
+        if (cBssid) match = match && bssid === cBssid;
+        if (cSsid) match = match && ssid === cSsid;
+        if (!match)
+          errors.push({
+            check: 'wifi',
+            message: 'You are not connected to the authorized school WiFi.',
+          });
       }
     }
 
     // ── GPS (range + accuracy gate + bounded tolerance) ─────────────────────
-    const gps = validateAttendanceGps(settings, { gpsLatitude, gpsLongitude, gpsAccuracy });
+    const gps = validateAttendanceGps(settings, {
+      gpsLatitude,
+      gpsLongitude,
+      gpsAccuracy,
+    });
     if (!gps.ok) errors.push({ check: 'gps', message: gps.reason });
 
     if (errors.length > 0) {
+      // Log failed validation
       await logEvent(req, 'attendance.wifi.failed_validation', {
-        targetType: 'teacher', targetId: teacherId, status: 'failed',
+        targetType: 'teacher',
+        targetId: teacherId,
+        status: 'failed',
         metadata: {
-          date: today, mode: 'wifi',
-          failedChecks: errors.map(e => e.check),
-          reason:       errors.map(e => e.message).join(' | '),
-          teacherLat:   gpsLatitude  != null ? parseFloat(gpsLatitude)  : null,
-          teacherLon:   gpsLongitude != null ? parseFloat(gpsLongitude) : null,
-          schoolLat:    settings.gpsLatitude,
-          schoolLon:    settings.gpsLongitude,
-          distance:     gps.distance ?? null,
-          gpsAccuracy:  gps.accuracy ?? (gpsAccuracy != null ? parseFloat(gpsAccuracy) : null),
-          ssid, bssid, platform: plat,
+          date: today,
+          mode: 'wifi',
+          failedChecks: errors.map((e) => e.check),
+          reason: errors.map((e) => e.message).join(' | '),
+          teacherLat: gpsLatitude != null ? parseFloat(gpsLatitude) : null,
+          teacherLon: gpsLongitude != null ? parseFloat(gpsLongitude) : null,
+          schoolLat: settings.gpsLatitude,
+          schoolLon: settings.gpsLongitude,
+          distance: gps.distance ?? null,
+          gpsAccuracy:
+            gps.accuracy ?? (gpsAccuracy != null ? parseFloat(gpsAccuracy) : null),
+          ssid,
+          bssid,
+          platform: plat,
+          deviceModel,
+          osVersion,
         },
       });
-      return res.status(403).json({ success: false, message: 'Attendance validation failed.', errors });
+
+      return res.status(403).json({
+        success: false,
+        message: 'Attendance validation failed.',
+        errors,
+      });
     }
 
     const teacher = await Teacher.findById(teacherId);
-    let isSuspicious = false, suspiciousReason = null;
+    let isSuspicious = false,
+      suspiciousReason = null;
     if (teacher.deviceId && deviceId && teacher.deviceId !== deviceId) {
-      isSuspicious = true; suspiciousReason = 'Attendance from unrecognized device.';
+      isSuspicious = true;
+      suspiciousReason = 'Attendance from unrecognized device.';
     }
 
     const record = await AttendanceRecord.create({
-      schoolId, school: teacher.school,
-      teacher: teacherId, teacherId: teacherId.toString(),
-      date: today, mode: 'wifi',
-      wifiSSID: ssid, wifiBSSID: bssid, gatewayIp: null,
-      gpsLatitude: gps.lat, gpsLongitude: gps.lon,
-      gpsAccuracy: gps.accuracy ?? null, distanceMeters: gps.distance ?? null,
-      deviceId, isSuspicious, suspiciousReason,
+      schoolId,
+      school: teacher.school,
+      teacher: teacherId,
+      teacherId: teacherId.toString(),
+      date: today,
+      mode: 'wifi',
+      wifiSSID: ssid,
+      wifiBSSID: bssid,
+      gpsLatitude: gps.lat,
+      gpsLongitude: gps.lon,
+      gpsAccuracy: gps.accuracy ?? null,
+      distanceMeters: gps.distance ?? null,
+      // Device diagnostics
+      deviceModel: deviceModel || null,
+      osName: osName || null,
+      osVersion: osVersion || null,
+      appVersion: appVersion || null,
+      platform: plat,
+      // GPS diagnostics
+      gpsPermissionStatus: gpsPermissionStatus || null,
+      gpsAttemptsCount:
+        gpsAttempts && Array.isArray(gpsAttempts) ? gpsAttempts.length : null,
+      gpsStartTime: gpsStartTime || null,
+      // Validation
+      validationStatus: 'success',
+      validationErrors: [],
+      rejectionReason: null,
+      // Security
+      deviceId,
+      isSuspicious,
+      suspiciousReason,
+      // Request metadata
+      ipAddress: req.ip || req.connection.remoteAddress,
+      userAgent: req.get('user-agent'),
+      submittedAt: timestamp ? new Date(timestamp) : new Date(),
     });
 
     if (isSuspicious) {
       await logEvent(req, 'attendance.suspicious_flagged', {
-        targetType: 'teacher', targetId: teacherId, targetName: teacher.name,
-        metadata: { date: today, mode: 'wifi', reason: suspiciousReason, deviceId },
+        targetType: 'teacher',
+        targetId: teacherId,
+        targetName: teacher.name,
+        metadata: {
+          date: today,
+          mode: 'wifi',
+          reason: suspiciousReason,
+          deviceId,
+        },
       });
     }
 
-    res.status(201).json({ success: true, message: 'Attendance marked successfully.', record });
+    res.status(201).json({
+      success: true,
+      message: 'Attendance marked successfully.',
+      record,
+    });
   } catch (err) {
-    if (err.code === 11000) return res.status(409).json({ success: false, message: 'Attendance already marked for today.' });
+    if (err.code === 11000)
+      return res.status(409).json({
+        success: false,
+        message: 'Attendance already marked for today.',
+      });
     res.status(500).json({ success: false, message: err.message });
   }
 };
@@ -151,125 +264,325 @@ exports.generateQRSession = async (req, res) => {
   try {
     const { schoolId } = req.user;
     const settings = await SchoolSettings.findOne({ schoolId });
-    if (!settings) return res.status(500).json({ success: false, message: 'School settings not configured.' });
-    if (!settings.qrAttendanceEnabled) return res.status(403).json({ success: false, message: 'QR attendance is disabled.' });
+    if (!settings)
+      return res.status(500).json({
+        success: false,
+        message: 'School settings not configured.',
+      });
+    if (!settings.qrAttendanceEnabled)
+      return res.status(403).json({
+        success: false,
+        message: 'QR attendance is disabled.',
+      });
 
     const today = getTodayDate();
-    await QRSession.updateMany({ schoolId, date: today, isActive: true }, { isActive: false });
-    const token     = crypto.randomBytes(32).toString('hex');
+    await QRSession.updateMany(
+      { schoolId, date: today, isActive: true },
+      { isActive: false }
+    );
+    const token = crypto.randomBytes(32).toString('hex');
     const expiresAt = new Date(Date.now() + settings.qrExpiryMinutes * 60 * 1000);
-    const session   = await QRSession.create({ schoolId, school: req.school._id, token, expiresAt, generatedBy: req.user.userId, date: today });
-    res.status(201).json({ success: true, message: `QR valid for ${settings.qrExpiryMinutes} minutes.`, session: { token: session.token, expiresAt: session.expiresAt, date: session.date, expiryMinutes: settings.qrExpiryMinutes } });
-  } catch (err) { res.status(500).json({ success: false, message: err.message }); }
+    const session = await QRSession.create({
+      schoolId,
+      school: req.school._id,
+      token,
+      expiresAt,
+      generatedBy: req.user.userId,
+      date: today,
+    });
+    res.status(201).json({
+      success: true,
+      message: `QR valid for ${settings.qrExpiryMinutes} minutes.`,
+      session: {
+        token: session.token,
+        expiresAt: session.expiresAt,
+        date: session.date,
+        expiryMinutes: settings.qrExpiryMinutes,
+      },
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
 };
 
 // ─── GET ACTIVE QR SESSION ───────────────────────────────────────────────────
 exports.getActiveQRSession = async (req, res) => {
   try {
     const { schoolId } = req.user;
-    const today   = getTodayDate();
-    const session = await QRSession.findOne({ schoolId, date: today, isActive: true }).sort({ createdAt: -1 });
-    if (!session || !session.isValid()) return res.json({ success: true, session: null });
-    res.json({ success: true, session: { token: session.token, expiresAt: session.expiresAt, date: session.date } });
-  } catch (err) { res.status(500).json({ success: false, message: err.message }); }
+    const today = getTodayDate();
+    const session = await QRSession.findOne({
+      schoolId,
+      date: today,
+      isActive: true,
+    }).sort({ createdAt: -1 });
+    if (!session || !session.isValid())
+      return res.json({ success: true, session: null });
+    res.json({
+      success: true,
+      session: {
+        token: session.token,
+        expiresAt: session.expiresAt,
+        date: session.date,
+      },
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
 };
 
 // ─── MARK QR ATTENDANCE ──────────────────────────────────────────────────────
-// QR now ALSO enforces GPS range (anti-sharing): a shared QR scanned from outside
-// the school radius is rejected. Flow: scan QR → selfie → GPS fetched → range
-// checked → attendance marked. lat/lon/accuracy are saved on the record.
 exports.markQRAttendance = async (req, res) => {
-  // Selfie is uploaded by multer BEFORE this handler runs. If we later reject the
-  // attendance we delete the orphaned Cloudinary upload (best-effort).
-  const selfieUrl      = req.file ? req.file.path     : null;
+  const selfieUrl = req.file ? req.file.path : null;
   const selfiePublicId = req.file ? req.file.filename : null;
   const cleanupSelfie = async () => {
-    if (selfiePublicId) { try { await cloudinary.uploader.destroy(selfiePublicId); } catch (_) {} }
+    if (selfiePublicId) {
+      try {
+        await cloudinary.uploader.destroy(selfiePublicId);
+      } catch (_) {}
+    }
   };
 
   try {
     const { schoolId, userId: teacherId } = req.user;
-    const { qrToken, deviceId, gpsLatitude, gpsLongitude, gpsAccuracy } = req.body;
+    const {
+      qrToken,
+      deviceId,
+      gpsLatitude,
+      gpsLongitude,
+      gpsAccuracy,
+      // Device diagnostics
+      deviceModel,
+      osName,
+      osVersion,
+      appVersion,
+      // GPS diagnostics
+      gpsPermissionStatus,
+      gpsAttempts,
+      gpsStartTime,
+      timestamp,
+    } = req.body;
 
-    if (!selfieUrl) return res.status(400).json({ success: false, message: 'Live selfie is required.' });
-    if (!qrToken)   { await cleanupSelfie(); return res.status(400).json({ success: false, message: 'QR token required.' }); }
+    if (!selfieUrl)
+      return res.status(400).json({
+        success: false,
+        message: 'Live selfie is required.',
+      });
+    if (!qrToken) {
+      await cleanupSelfie();
+      return res.status(400).json({
+        success: false,
+        message: 'QR token required.',
+      });
+    }
     if (gpsLatitude == null || gpsLongitude == null) {
       await cleanupSelfie();
-      return res.status(400).json({ success: false, message: 'Location is required to mark QR attendance.' });
+      return res.status(400).json({
+        success: false,
+        message: 'Location is required to mark QR attendance.',
+      });
     }
 
     const settings = await SchoolSettings.findOne({ schoolId });
-    if (!settings)                     { await cleanupSelfie(); return res.status(500).json({ success: false, message: 'School settings not configured.' }); }
-    if (!settings.qrAttendanceEnabled) { await cleanupSelfie(); return res.status(403).json({ success: false, message: 'QR attendance is disabled.' }); }
+    if (!settings) {
+      await cleanupSelfie();
+      return res.status(500).json({
+        success: false,
+        message: 'School settings not configured.',
+      });
+    }
+    if (!settings.qrAttendanceEnabled) {
+      await cleanupSelfie();
+      return res.status(403).json({
+        success: false,
+        message: 'QR attendance is disabled.',
+      });
+    }
 
     const today = getTodayDate();
-    const gate  = holidayGate(settings, today);
-    if (gate) { await cleanupSelfie(); return res.status(403).json({ success: false, message: gate }); }
+    const gate = holidayGate(settings, today);
+    if (gate) {
+      await cleanupSelfie();
+      return res.status(403).json({ success: false, message: gate });
+    }
 
-    const existing = await AttendanceRecord.findOne({ schoolId, teacherId: teacherId.toString(), date: today });
-    if (existing) { await cleanupSelfie(); return res.status(409).json({ success: false, message: 'Attendance already marked for today.' }); }
+    const existing = await AttendanceRecord.findOne({
+      schoolId,
+      teacherId: teacherId.toString(),
+      date: today,
+    });
+    if (existing) {
+      await cleanupSelfie();
+      return res.status(409).json({
+        success: false,
+        message: 'Attendance already marked for today.',
+      });
+    }
 
-    const session = await QRSession.findOne({ schoolId, token: qrToken, date: today });
-    if (!session)           { await cleanupSelfie(); return res.status(400).json({ success: false, message: 'Invalid QR code.' }); }
-    if (!session.isValid()) { await cleanupSelfie(); return res.status(400).json({ success: false, message: 'QR code expired. Ask admin to regenerate.' }); }
+    const session = await QRSession.findOne({
+      schoolId,
+      token: qrToken,
+      date: today,
+    });
+    if (!session) {
+      await cleanupSelfie();
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid QR code.',
+      });
+    }
+    if (!session.isValid()) {
+      await cleanupSelfie();
+      return res.status(400).json({
+        success: false,
+        message: 'QR code expired. Ask admin to regenerate.',
+      });
+    }
 
-    // ── GPS range protection (anti-sharing) — same logic as WiFi attendance ──
-    const gps = validateAttendanceGps(settings, { gpsLatitude, gpsLongitude, gpsAccuracy });
+    // ── GPS range protection (anti-sharing) ───────────────────────────────
+    const gps = validateAttendanceGps(settings, {
+      gpsLatitude,
+      gpsLongitude,
+      gpsAccuracy,
+    });
     if (!gps.ok) {
       await logEvent(req, 'attendance.qr.failed_validation', {
-        targetType: 'teacher', targetId: teacherId, status: 'failed',
+        targetType: 'teacher',
+        targetId: teacherId,
+        status: 'failed',
         metadata: {
-          date: today, mode: 'qr',
+          date: today,
+          mode: 'qr',
           failedChecks: ['gps'],
-          reason:      gps.reason,
-          teacherLat:  gpsLatitude  != null ? parseFloat(gpsLatitude)  : null,
-          teacherLon:  gpsLongitude != null ? parseFloat(gpsLongitude) : null,
-          schoolLat:   settings.gpsLatitude,
-          schoolLon:   settings.gpsLongitude,
-          distance:    gps.distance ?? null,
-          gpsAccuracy: gps.accuracy ?? (gpsAccuracy != null ? parseFloat(gpsAccuracy) : null),
+          reason: gps.reason,
+          teacherLat: gpsLatitude != null ? parseFloat(gpsLatitude) : null,
+          teacherLon: gpsLongitude != null ? parseFloat(gpsLongitude) : null,
+          schoolLat: settings.gpsLatitude,
+          schoolLon: settings.gpsLongitude,
+          distance: gps.distance ?? null,
+          gpsAccuracy:
+            gps.accuracy ?? (gpsAccuracy != null ? parseFloat(gpsAccuracy) : null),
+          deviceModel,
+          osVersion,
         },
       });
       await cleanupSelfie();
-      return res.status(403).json({ success: false, message: gps.reason, errors: [{ check: 'gps', message: gps.reason }] });
+      return res.status(403).json({
+        success: false,
+        message: gps.reason,
+        errors: [{ check: 'gps', message: gps.reason }],
+      });
     }
 
     const teacher = await Teacher.findById(teacherId);
-    if (!teacher) { await cleanupSelfie(); return res.status(404).json({ success: false, message: 'Teacher not found.' }); }
+    if (!teacher) {
+      await cleanupSelfie();
+      return res.status(404).json({
+        success: false,
+        message: 'Teacher not found.',
+      });
+    }
 
-    let isSuspicious = false, suspiciousReason = null;
+    let isSuspicious = false,
+      suspiciousReason = null;
     if (teacher.deviceId && deviceId && teacher.deviceId !== deviceId) {
-      isSuspicious = true; suspiciousReason = 'Attendance from unrecognized device.';
+      isSuspicious = true;
+      suspiciousReason = 'Attendance from unrecognized device.';
     }
 
     const record = await AttendanceRecord.create({
-      schoolId, school: teacher.school,
-      teacher: teacherId, teacherId: teacherId.toString(),
-      date: today, mode: 'qr', selfieUrl, selfiePublicId, qrSession: session._id,
-      gpsLatitude: gps.lat, gpsLongitude: gps.lon,
-      gpsAccuracy: gps.accuracy ?? null, distanceMeters: gps.distance ?? null,
-      deviceId, isSuspicious, suspiciousReason,
+      schoolId,
+      school: teacher.school,
+      teacher: teacherId,
+      teacherId: teacherId.toString(),
+      date: today,
+      mode: 'qr',
+      selfieUrl,
+      selfiePublicId,
+      qrSession: session._id,
+      gpsLatitude: gps.lat,
+      gpsLongitude: gps.lon,
+      gpsAccuracy: gps.accuracy ?? null,
+      distanceMeters: gps.distance ?? null,
+      // Device diagnostics
+      deviceModel: deviceModel || null,
+      osName: osName || null,
+      osVersion: osVersion || null,
+      appVersion: appVersion || null,
+      platform: 'unknown',
+      // GPS diagnostics
+      gpsPermissionStatus: gpsPermissionStatus || null,
+      gpsAttemptsCount:
+        gpsAttempts && Array.isArray(gpsAttempts) ? gpsAttempts.length : null,
+      gpsStartTime: gpsStartTime || null,
+      // Validation
+      validationStatus: 'success',
+      validationErrors: [],
+      rejectionReason: null,
+      // Security
+      deviceId,
+      isSuspicious,
+      suspiciousReason,
+      // Request metadata
+      ipAddress: req.ip || req.connection.remoteAddress,
+      userAgent: req.get('user-agent'),
+      submittedAt: timestamp ? new Date(timestamp) : new Date(),
     });
 
-    if (isSuspicious) await logEvent(req, 'attendance.suspicious_flagged', { targetType:'teacher', targetId:teacherId, targetName:teacher.name, metadata:{ date:today, mode:'qr', reason:suspiciousReason, deviceId } });
+    if (isSuspicious)
+      await logEvent(req, 'attendance.suspicious_flagged', {
+        targetType: 'teacher',
+        targetId: teacherId,
+        targetName: teacher.name,
+        metadata: {
+          date: today,
+          mode: 'qr',
+          reason: suspiciousReason,
+          deviceId,
+        },
+      });
 
-    res.status(201).json({ success: true, message: 'Attendance marked successfully.', record });
+    res.status(201).json({
+      success: true,
+      message: 'Attendance marked successfully.',
+      record,
+    });
   } catch (err) {
     await cleanupSelfie();
-    if (err.code === 11000) return res.status(409).json({ success: false, message: 'Attendance already marked for today.' });
+    if (err.code === 11000)
+      return res.status(409).json({
+        success: false,
+        message: 'Attendance already marked for today.',
+      });
     res.status(500).json({ success: false, message: err.message });
   }
 };
 
 exports.getTodayAttendance = async (req, res) => {
   try {
-    const { schoolId } = req.user; const today = getTodayDate();
-    const records     = await AttendanceRecord.find({ schoolId, date: today }).populate('teacher','name email').sort({ markedAt:-1 });
-    const allTeachers = await Teacher.find({ schoolId, isActive: true }).select('name email');
-    const presentIds  = new Set(records.map(r => r.teacherId));
-    const absent      = allTeachers.filter(t => !presentIds.has(t._id.toString()));
-    res.json({ success:true, date:today, summary:{ present:records.length, absent:absent.length, total:allTeachers.length }, present:records, absent });
-  } catch (err) { res.status(500).json({ success:false, message:err.message }); }
+    const { schoolId } = req.user;
+    const today = getTodayDate();
+    const records = await AttendanceRecord.find({ schoolId, date: today })
+      .populate('teacher', 'name email')
+      .sort({ markedAt: -1 });
+    const allTeachers = await Teacher.find({ schoolId, isActive: true }).select(
+      'name email'
+    );
+    const presentIds = new Set(records.map((r) => r.teacherId));
+    const absent = allTeachers.filter((t) => !presentIds.has(t._id.toString()));
+    res.json({
+      success: true,
+      date: today,
+      summary: {
+        present: records.length,
+        absent: absent.length,
+        total: allTeachers.length,
+      },
+      present: records,
+      absent,
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
 };
 
 exports.getMyAttendance = async (req, res) => {
@@ -277,35 +590,71 @@ exports.getMyAttendance = async (req, res) => {
     const { userId: teacherId, schoolId } = req.user;
     const { month, year } = req.query;
     const filter = { schoolId, teacherId: teacherId.toString() };
-    if (month && year) filter.date = { $regex: `^${year}-${String(month).padStart(2,'0')}` };
+    if (month && year)
+      filter.date = { $regex: `^${year}-${String(month).padStart(2, '0')}` };
     const records = await AttendanceRecord.find(filter).sort({ date: -1 });
     res.json({ success: true, total: records.length, records });
-  } catch (err) { res.status(500).json({ success: false, message: err.message }); }
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
 };
 
 exports.getMonthlyReport = async (req, res) => {
   try {
-    const { schoolId } = req.user; const { month, year } = req.params;
-    const datePrefix = `${year}-${String(month).padStart(2,'0')}`;
-    const teachers = await Teacher.find({ schoolId, isActive: true }).select('name email');
-    const records  = await AttendanceRecord.find({ schoolId, date: { $regex: `^${datePrefix}` } });
-    const report   = teachers.map(t => {
-      const recs = records.filter(r => r.teacherId === t._id.toString());
-      return { teacher: { id:t._id, name:t.name, email:t.email }, totalPresent:recs.length, records: recs.map(r => ({ date:r.date, mode:r.mode, markedAt:r.markedAt })) };
+    const { schoolId } = req.user;
+    const { month, year } = req.params;
+    const datePrefix = `${year}-${String(month).padStart(2, '0')}`;
+    const teachers = await Teacher.find({ schoolId, isActive: true }).select(
+      'name email'
+    );
+    const records = await AttendanceRecord.find({
+      schoolId,
+      date: { $regex: `^${datePrefix}` },
     });
-    res.json({ success:true, month, year, report });
-  } catch (err) { res.status(500).json({ success:false, message:err.message }); }
+    const report = teachers.map((t) => {
+      const recs = records.filter((r) => r.teacherId === t._id.toString());
+      return {
+        teacher: { id: t._id, name: t.name, email: t.email },
+        totalPresent: recs.length,
+        records: recs.map((r) => ({
+          date: r.date,
+          mode: r.mode,
+          markedAt: r.markedAt,
+        })),
+      };
+    });
+    res.json({ success: true, month, year, report });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
 };
 
 exports.getDailyReport = async (req, res) => {
   try {
-    const { schoolId } = req.user; const { date } = req.params;
-    const records     = await AttendanceRecord.find({ schoolId, date }).populate('teacher','name email').sort({ markedAt:1 });
-    const allTeachers = await Teacher.find({ schoolId, isActive: true }).select('name email');
-    const presentIds  = new Set(records.map(r => r.teacherId));
-    const absent      = allTeachers.filter(t => !presentIds.has(t._id.toString()));
-    res.json({ success:true, date, summary:{ present:records.length, absent:absent.length, total:allTeachers.length }, present:records, absent });
-  } catch (err) { res.status(500).json({ success:false, message:err.message }); }
+    const { schoolId } = req.user;
+    const { date } = req.params;
+    const records = await AttendanceRecord.find({ schoolId, date })
+      .populate('teacher', 'name email')
+      .sort({ markedAt: 1 });
+    const allTeachers = await Teacher.find({ schoolId, isActive: true }).select(
+      'name email'
+    );
+    const presentIds = new Set(records.map((r) => r.teacherId));
+    const absent = allTeachers.filter((t) => !presentIds.has(t._id.toString()));
+    res.json({
+      success: true,
+      date,
+      summary: {
+        present: records.length,
+        absent: absent.length,
+        total: allTeachers.length,
+      },
+      present: records,
+      absent,
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
 };
 
 exports.getSuspiciousActivity = async (req, res) => {
@@ -313,8 +662,15 @@ exports.getSuspiciousActivity = async (req, res) => {
     const { schoolId, page = 1, limit = 50 } = req.query;
     const filter = { isSuspicious: true };
     if (schoolId) filter.schoolId = schoolId;
-    const logs  = await AttendanceRecord.find(filter).populate('teacher','name email').populate('school','name').sort({ createdAt:-1 }).skip((page-1)*limit).limit(parseInt(limit));
+    const logs = await AttendanceRecord.find(filter)
+      .populate('teacher', 'name email')
+      .populate('school', 'name')
+      .sort({ createdAt: -1 })
+      .skip((page - 1) * limit)
+      .limit(parseInt(limit));
     const total = await AttendanceRecord.countDocuments(filter);
-    res.json({ success:true, total, page: parseInt(page), logs });
-  } catch (err) { res.status(500).json({ success:false, message:err.message }); }
+    res.json({ success: true, total, page: parseInt(page), logs });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
 };
