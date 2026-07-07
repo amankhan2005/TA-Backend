@@ -344,10 +344,156 @@ const sendInquiryConfirmationEmail = async ({ inquiry }) => {
   });
 };
 
+// ─────────────────────────────────────────────────────────────────────────────
+// ERP Phase 1 — Parent-facing email templates (additive; nothing above changed)
+// ─────────────────────────────────────────────────────────────────────────────
+
+// ── Student RFID punch-in / punch-out notification ───────────────────────────
+const sendStudentAttendanceEmail = async ({
+  toEmail, schoolName, schoolLogoUrl, studentName, studentIdNumber,
+  className, sectionName, date, time, eventType, // eventType: 'punch_in' | 'punch_out' | 'late'
+}) => {
+  const labels = {
+    punch_in: { title: 'Punch In Recorded', emoji: '✅', color: BRAND.successBorder, verb: 'checked in' },
+    punch_out: { title: 'Punch Out Recorded', emoji: '👋', color: BRAND.tealDark, verb: 'checked out' },
+    late: { title: 'Late Arrival', emoji: '⏰', color: '#D97706', verb: 'arrived late' },
+  };
+  const l = labels[eventType] || labels.punch_in;
+  const logo = schoolLogoUrl
+    ? `<img src="${schoolLogoUrl}" alt="${schoolName}" style="height:36px;margin-bottom:16px;" />`
+    : `<p style="margin:0 0 16px;font-size:14px;font-weight:700;color:${BRAND.navy};">${schoolName}</p>`;
+
+  const body = `
+    ${logo}
+    <h2 style="margin:0 0 6px;font-size:24px;font-weight:700;color:${BRAND.textDark};">${l.emoji} ${l.title}</h2>
+    <p style="margin:0 0 20px;font-size:13px;color:${l.color};font-weight:600;text-transform:uppercase;letter-spacing:0.5px;">Attendance Update</p>
+    <p style="color:${BRAND.textMid};font-size:15px;line-height:1.7;margin:0 0 16px;">
+      <strong style="color:${BRAND.textDark};">${studentName}</strong> (ID: ${studentIdNumber}, ${className} - ${sectionName}) ${l.verb} at <strong>${time}</strong> on ${date}.
+    </p>
+    ${divider}
+    <p style="color:${BRAND.textMuted};font-size:12px;margin:0;">This is an automated notification from ${schoolName}, sent via the TeacherAttendance platform.</p>
+  `;
+  await getClient().emails.send({
+    from: FROM(),
+    to: toEmail,
+    subject: `${l.title} — ${studentName}`,
+    html: baseWrapper(body),
+  });
+};
+
+// ── Fee due / overdue reminder ────────────────────────────────────────────────
+const sendFeeReminderEmail = async ({
+  toEmail, schoolName, schoolLogoUrl, studentName, studentIdNumber,
+  amountDue, currency, dueDate, reminderType, // reminderType: 'due' | 'overdue'
+}) => {
+  const isOverdue = reminderType === 'overdue';
+  const logo = schoolLogoUrl
+    ? `<img src="${schoolLogoUrl}" alt="${schoolName}" style="height:36px;margin-bottom:16px;" />`
+    : `<p style="margin:0 0 16px;font-size:14px;font-weight:700;color:${BRAND.navy};">${schoolName}</p>`;
+
+  const body = `
+    ${logo}
+    <h2 style="margin:0 0 6px;font-size:24px;font-weight:700;color:${BRAND.textDark};">${isOverdue ? '⚠️ Overdue Fee Reminder' : '📌 Fee Payment Reminder'}</h2>
+    <p style="margin:0 0 20px;font-size:13px;color:${isOverdue ? BRAND.errorText : BRAND.tealDark};font-weight:600;text-transform:uppercase;letter-spacing:0.5px;">${schoolName}</p>
+    <p style="color:${BRAND.textMid};font-size:15px;line-height:1.7;margin:0 0 12px;">
+      A fee payment for <strong style="color:${BRAND.textDark};">${studentName}</strong> (ID: ${studentIdNumber}) ${isOverdue ? 'is now overdue' : 'is coming due'}.
+    </p>
+    <div style="background:${isOverdue ? BRAND.errorBg : BRAND.successBg};border:1px solid ${isOverdue ? BRAND.errorBorder : BRAND.successBorder};border-radius:8px;padding:14px 18px;margin:20px 0;">
+      <p style="margin:0;font-size:15px;color:${BRAND.textDark};"><strong>Amount:</strong> ${currency} ${amountDue}</p>
+      <p style="margin:4px 0 0;font-size:15px;color:${BRAND.textDark};"><strong>Due date:</strong> ${dueDate}</p>
+    </div>
+    ${divider}
+    <p style="color:${BRAND.textMuted};font-size:12px;margin:0;">Please contact the school office if you have already made this payment or have any questions.</p>
+  `;
+  await getClient().emails.send({
+    from: FROM(),
+    to: toEmail,
+    subject: `${isOverdue ? 'Overdue' : 'Reminder'}: Fee payment for ${studentName}`,
+    html: baseWrapper(body),
+  });
+};
+
+// ── Generic "your report is ready" notification (attendance or fee reports) ──
+const sendReportReadyEmail = async ({ toEmail, schoolName, schoolLogoUrl, studentName, reportLabel, downloadUrl }) => {
+  const logo = schoolLogoUrl
+    ? `<img src="${schoolLogoUrl}" alt="${schoolName}" style="height:36px;margin-bottom:16px;" />`
+    : `<p style="margin:0 0 16px;font-size:14px;font-weight:700;color:${BRAND.navy};">${schoolName}</p>`;
+  const body = `
+    ${logo}
+    <h2 style="margin:0 0 6px;font-size:24px;font-weight:700;color:${BRAND.textDark};">📄 ${reportLabel} Ready</h2>
+    <p style="color:${BRAND.textMid};font-size:15px;line-height:1.7;margin:0 0 16px;">
+      A new ${reportLabel.toLowerCase()} for <strong style="color:${BRAND.textDark};">${studentName}</strong> is ready to download.
+    </p>
+    ${ctaButton(downloadUrl, 'Download Report →')}
+    ${divider}
+    <p style="color:${BRAND.textMuted};font-size:12px;margin:0;">Sent by ${schoolName} via the TeacherAttendance platform.</p>
+  `;
+  await getClient().emails.send({
+    from: FROM(),
+    to: toEmail,
+    subject: `${reportLabel} ready — ${studentName}`,
+    html: baseWrapper(body),
+  });
+};
+
+const sendPromotionEmail = async ({ toEmail, schoolName, schoolLogoUrl, studentName, newClassName }) => {
+  const logo = schoolLogoUrl
+    ? `<img src="${schoolLogoUrl}" alt="${schoolName}" style="height:36px;margin-bottom:16px;" />`
+    : `<p style="margin:0 0 16px;font-size:14px;font-weight:700;color:${BRAND.navy};">${schoolName}</p>`;
+  const body = `
+    ${logo}
+    <h2 style="margin:0 0 6px;font-size:24px;font-weight:700;color:${BRAND.textDark};">🎓 Promotion Update</h2>
+    <p style="color:${BRAND.textMid};font-size:15px;line-height:1.7;margin:0 0 16px;">
+      <strong style="color:${BRAND.textDark};">${studentName}</strong> has been promoted to <strong>${newClassName}</strong>. Congratulations!
+    </p>
+    ${divider}
+    <p style="color:${BRAND.textMuted};font-size:12px;margin:0;">Sent by ${schoolName} via the TeacherAttendance platform.</p>
+  `;
+  await getClient().emails.send({ from: FROM(), to: toEmail, subject: `${studentName} promoted to ${newClassName}`, html: baseWrapper(body) });
+};
+
+const sendParentPasswordResetEmail = async ({ toEmail, resetLink, parentName }) => {
+  const body = `
+    <h2 style="margin:0 0 6px;font-size:26px;font-weight:700;color:${BRAND.textDark};">Reset your password</h2>
+    <p style="margin:0 0 20px;font-size:13px;color:${BRAND.tealDark};font-weight:600;text-transform:uppercase;letter-spacing:0.5px;">Parent Portal</p>
+    <p style="color:${BRAND.textMid};font-size:15px;line-height:1.7;margin:0 0 12px;">
+      Hi ${parentName || 'there'}, we received a request to reset your Parent Portal password. Click below to set a new one.
+    </p>
+    <div style="background:${BRAND.successBg};border:1px solid ${BRAND.successBorder};border-radius:8px;padding:14px 18px;margin:20px 0;">
+      <p style="margin:0;font-size:13px;color:#0f766e;">⏱ &nbsp;<strong>This link expires in 1 hour.</strong></p>
+    </div>
+    ${ctaButton(resetLink, 'Reset My Password →')}
+    <p style="color:${BRAND.textMuted};font-size:12px;margin-top:20px;">If you didn't request this, you can safely ignore this email.</p>
+  `;
+  await getClient().emails.send({ from: FROM(), to: toEmail, subject: 'Reset your Parent Portal password', html: baseWrapper(body) });
+};
+
+const sendParentActivationEmail = async ({ toEmail, activationLink, parentName, schoolName }) => {
+  const body = `
+    <h2 style="margin:0 0 6px;font-size:26px;font-weight:700;color:${BRAND.textDark};">Activate your account</h2>
+    <p style="margin:0 0 20px;font-size:13px;color:${BRAND.tealDark};font-weight:600;text-transform:uppercase;letter-spacing:0.5px;">Parent Portal${schoolName ? ' · ' + schoolName : ''}</p>
+    <p style="color:${BRAND.textMid};font-size:15px;line-height:1.7;margin:0 0 12px;">
+      Hi ${parentName || 'there'}, an account has been created for you to follow your child's attendance, fees, and reports. Set your password to get started.
+    </p>
+    <div style="background:${BRAND.successBg};border:1px solid ${BRAND.successBorder};border-radius:8px;padding:14px 18px;margin:20px 0;">
+      <p style="margin:0;font-size:13px;color:#0f766e;">⏱ &nbsp;<strong>This activation link expires in 7 days.</strong></p>
+    </div>
+    ${ctaButton(activationLink, 'Activate My Account →')}
+  `;
+  await getClient().emails.send({ from: FROM(), to: toEmail, subject: `Activate your Parent Portal account${schoolName ? ' — ' + schoolName : ''}`, html: baseWrapper(body) });
+};
+
 module.exports = {
   sendSchoolInviteEmail,
   sendPasswordResetEmail,
   sendTeacherWelcomeEmail,
   sendInquiryAdminEmail,
   sendInquiryConfirmationEmail,
+  // ERP Phase 1 additions:
+  sendStudentAttendanceEmail,
+  sendFeeReminderEmail,
+  sendReportReadyEmail,
+  sendPromotionEmail,
+  sendParentPasswordResetEmail,
+  sendParentActivationEmail,
 };

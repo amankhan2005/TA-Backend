@@ -28,5 +28,7 @@ function makeUpload(storage, sizeMB) {
 const uploadLogo         = makeUpload(makeStorage('teacherattendance/logos',    ['jpg','jpeg','png','webp'], { width:400, height:400, crop:'limit'         }), 5);
 const uploadSelfie       = makeUpload(makeStorage('teacherattendance/selfies',  ['jpg','jpeg','png'],        { width:800, height:800, crop:'limit'         }), 10);
 const uploadProfilePhoto = makeUpload(makeStorage('teacherattendance/profiles', ['jpg','jpeg','png','webp'], { width:400, height:400, crop:'fill', gravity:'face' }), 5);
+// ERP Phase 2 — student photo (additive; existing presets above untouched)
+const uploadStudentPhoto = makeUpload(makeStorage('teacherattendance/students', ['jpg','jpeg','png','webp'], { width:400, height:400, crop:'fill', gravity:'face' }), 5);
 
-module.exports = { cloudinary, uploadLogo, uploadSelfie, uploadProfilePhoto };
+module.exports = { cloudinary, uploadLogo, uploadSelfie, uploadProfilePhoto, uploadStudentPhoto };

@@ -82,6 +82,105 @@ const auditLogSchema = new mongoose.Schema(
         'appversion.created',
         'appversion.updated',
         'appversion.deleted',
+
+        // ── ERP Phase 0+ — additive only, existing values above are untouched ──
+
+        // Academic structure (School Admin)
+        'academicSession.created',
+        'academicSession.updated',
+        'academicSession.activated',
+        'schoolClass.created',
+        'schoolClass.updated',
+        'schoolClass.deleted',
+        'section.created',
+        'section.updated',
+        'section.deleted',
+
+        // Student master (School Admin)
+        'student.created',
+        'student.updated',
+        'student.deleted',
+        'student.bulkImported',
+
+        // RFID management (School Admin)
+        'rfidCard.assigned',
+        'rfidCard.unassigned',
+        'rfidCard.replaced',
+        'rfidCard.disabled',
+        'rfidCard.reactivated',
+        'apiDevice.registered',
+        'apiDevice.keyRotated',
+        'apiDevice.revoked',
+
+        // Student attendance (system / School Admin)
+        'studentAttendance.settings.updated',
+        'studentAttendance.suspicious_flagged',
+
+        // Fee management (School Admin)
+        'feeStructure.created',
+        'feeStructure.updated',
+        'feeStructure.deleted',
+        'invoice.generated',
+        'invoice.bulkGenerated',
+        'invoice.voided',
+        'payment.recorded',
+        'payment.voided',
+        'statement.generated',
+
+        // Notifications (School Admin)
+        'notificationSettings.updated',
+
+        // Reporting (School Admin)
+        'reportSchedule.created',
+        'reportSchedule.updated',
+        'reportSchedule.toggled',
+
+        // Promotion (School Admin)
+        'promotion.previewed',
+        'promotion.executed',
+        'promotion.rolledBack',
+        'retention.applied',
+        'transfer.executed',
+        // RFID Identity & Verification (Phase 8)
+        'rfidCard.markedLost',
+        'rfidCard.markedDamaged',
+        'rfidCard.reissued',
+        'qr.generated',
+        'qr.regenerated',
+        'student.verified',
+        // Parent Portal (Phase 9)
+        'parent.created',
+        'parent.childLinked',
+        'parent.login',
+        'parent.logout',
+        'parent.passwordReset',
+        'parent.passwordResetRequested',
+        'parent.profileUpdated',
+        'parent.leaveSubmitted',
+        'parent.reportDownloaded',
+        'leave.approved',
+        'leave.rejected',
+
+        // ID cards (School Admin)
+        'idCardBatch.generated',
+
+        // Leave management (Parent / School Admin)
+        'leaveCategory.created',
+        'leaveCategory.updated',
+        'leaveRequest.submitted',
+        'leaveRequest.approved',
+        'leaveRequest.rejected',
+        'leaveRequest.cancelled',
+
+        // Bulk import/export (School Admin)
+        'importExportJob.started',
+        'importExportJob.completed',
+        'importExportJob.failed',
+
+        // Parent portal (Parent)
+        'parent.registered',
+        'parent.login.success',
+        'parent.login.failed',
       ],
     },
 

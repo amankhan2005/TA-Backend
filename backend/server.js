@@ -1,4 +1,5 @@
- require('dotenv').config();
+require('dotenv').config();
+require('./config/validateEnv').validateEnv({ role: 'api' });
 const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
@@ -18,6 +19,26 @@ const appVersionRoutes    = require('./routes/appVersion');
 const inquiryRoutes       = require('./routes/inquiries');
 const teacherInquiryRoutes = require('./routes/teacherInquiries');
 
+// ── ERP Phase 2+ route imports (additive; nothing above is touched) ─────────
+const sessionRoutes       = require('./routes/sessions');
+const classRoutes         = require('./routes/classes');
+const sectionRoutes       = require('./routes/sections');
+const studentRoutes       = require('./routes/students');
+const rfidRoutes          = require('./routes/rfid');
+const studentAttendanceRoutes = require('./routes/studentAttendance');
+const apiDeviceRoutes     = require('./routes/apiDevices');
+const reportRoutes        = require('./routes/reports');
+const feeRoutes           = require('./routes/fees');
+const dashboardRoutes     = require('./routes/dashboard');
+const platformRoutes      = require('./routes/platform');
+const promotionRoutes     = require('./routes/promotions');
+const identityRoutes      = require('./routes/identity');
+const verificationRoutes  = require('./routes/verification');
+const parentAuthRoutes    = require('./routes/parentAuth');
+const parentPortalRoutes  = require('./routes/parentPortal');
+const parentsRoutes       = require('./routes/parents');
+const notificationSettingsRoutes = require('./routes/notificationSettings');
+
 const app = express();
 
  
@@ -34,21 +55,27 @@ connectDB();
 app.use(helmet());
 
  
-const allowedOrigins = [
-  // Production — main domain (covers all subpath-deployed panel apps
-  // because browsers send only the domain as the Origin header)
-  'https://teacherattendance.com',
-  'https://www.teacherattendance.com',
+// Reduce a full frontend URL (which may include a subpath such as
+// ".../parent" or ".../schooladmin") down to its origin — scheme + host + port.
+// Browsers send only the origin in the Origin header, so one origin entry
+// covers every subpath-deployed app on that domain (/parent, /admin, ...).
+const originOf = (url) => { try { return new URL(url).origin; } catch { return null; } };
 
-  // Local development
-  'http://localhost:5173',   // Vite default / website
+const allowedOrigins = [
+  // Derived from configuration so a new production domain (e.g. mydomain.com,
+  // hosting /parent and /admin together) works without editing code.
+  originOf(process.env.PARENT_PORTAL_URL),
+  originOf(process.env.FRONTEND_SCHOOL_ADMIN_URL),
+  originOf(process.env.FRONTEND_SUPER_ADMIN_URL),
+  originOf(process.env.FRONTEND_URL),
+
+  // Local development defaults
+  'http://localhost:5173',   // website / super admin local
   'http://localhost:5174',   // school admin local
-  'http://localhost:5175',   // super admin local
+  'http://localhost:5175',   // parent portal local
 
   // Netlify preview URLs (add your actual Netlify app hostnames here)
   'https://teachertattendance.netlify.app',
-  // e.g. 'https://ta-schooladmin.netlify.app',
-  // e.g. 'https://ta-superadmin.netlify.app',
 ].filter(Boolean);
 
 const corsOptions = {
@@ -99,6 +126,18 @@ const authLimiter = rateLimit({
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
+// ── NoSQL-injection hardening (audit Fix 1) ─────────────────────────────────
+// Strips any key containing a Mongo operator prefix ($) or a dot from
+// req.body / req.query / req.params, so payloads like {"$gt":""} or
+// {"$ne":null} can never reach a query. Runs after body parsing, before routes.
+const mongoSanitize = require('express-mongo-sanitize');
+app.use(mongoSanitize({
+  replaceWith: '_',
+  onSanitize: ({ req, key }) => {
+    console.warn(`[security] sanitized suspicious key "${key}" on ${req.method} ${req.originalUrl} from ${req.ip}`);
+  },
+}));
+
 // ─────────────────────────────────────────────────────────────
 // Health Check
 // ─────────────────────────────────────────────────────────────
@@ -125,6 +164,26 @@ app.use('/api/audit',            auditRoutes);
 app.use('/api/app-version',      appVersionRoutes);
 app.use('/api/teacher-inquiries', teacherInquiryRoutes);
 app.use('/api/inquiries',        inquiryRoutes);
+
+// ── ERP Phase 2+ routes (additive; nothing above is touched) ────────────────
+app.use('/api/sessions',         sessionRoutes);
+app.use('/api/classes',          classRoutes);
+app.use('/api/sections',         sectionRoutes);
+app.use('/api/students',         studentRoutes);
+app.use('/api/rfid',             rfidRoutes);
+app.use('/api/student-attendance', studentAttendanceRoutes);
+app.use('/api/rfid-devices',       apiDeviceRoutes);
+app.use('/api/reports',            reportRoutes);
+app.use('/api/fees',               feeRoutes);
+app.use('/api/dashboard',          dashboardRoutes);
+app.use('/api/platform',           platformRoutes);
+app.use('/api/promotions',         promotionRoutes);
+app.use('/api/identity',           identityRoutes);
+app.use('/api/verification',       verificationRoutes);
+app.use('/api/parent/auth',        parentAuthRoutes);
+app.use('/api/parent/portal',      parentPortalRoutes);
+app.use('/api/parents',            parentsRoutes);
+app.use('/api/notification-settings', notificationSettingsRoutes);
 
 // ─────────────────────────────────────────────────────────────
 // 404 Handler

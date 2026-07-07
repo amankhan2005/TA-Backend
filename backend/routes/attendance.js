@@ -9,6 +9,7 @@ const {
   markWifiAttendance, generateQRSession, getActiveQRSession, markQRAttendance,
   getTodayAttendance, getMyAttendance, getMonthlyReport, getDailyReport, getSuspiciousActivity,
 } = require('../controllers/attendanceController');
+const { exportTeacherAttendance } = require('../controllers/attendanceExportController');
 
 // WiFi attendance — GPS is mandatory; SSID/BSSID enforced in controller (platform-aware).
 router.post('/wifi', protect('teacher'), requireActiveSchool, [
@@ -33,5 +34,8 @@ router.get('/today',              protect('schoolAdmin'), requireActiveSchool, g
 router.get('/daily/:date',        protect('schoolAdmin'), requireActiveSchool, [param('date').matches(/^\d{4}-\d{2}-\d{2}$/), validate], getDailyReport);
 router.get('/report/:year/:month',protect('schoolAdmin'), requireActiveSchool, getMonthlyReport);
 router.get('/suspicious',         protect('superAdmin'),  getSuspiciousActivity);
+
+// Teacher attendance export (additive, read-only). ?format=xlsx|csv&range=&date=&from=&to=
+router.get('/export',             protect('schoolAdmin'), requireActiveSchool, exportTeacherAttendance);
 
 module.exports = router;

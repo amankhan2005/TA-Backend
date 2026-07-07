@@ -1,5 +1,8 @@
 const mongoose = require('mongoose');
 
+ 
+require('./SubscriptionPlan');
+
 const schoolSchema = new mongoose.Schema({
   schoolId: { type: String, required: true, unique: true },
   name: { type: String, required: true, trim: true },
