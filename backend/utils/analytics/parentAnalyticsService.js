@@ -1,22 +1,42 @@
 /**
  * parentAnalyticsService.js — Phase 9 parent-account metrics for dashboards.
  * School-scoped counts use the ownership links (linkedStudents.schoolId).
+ *
+ * ── WHY THIS FILE CHANGED ───────────────────────────────────────────────────
+ * It previously queried `{ isActive: true, isActivated: true }`. Those are now
+ * VIRTUALS on the Parent model, and Mongoose virtuals DO NOT participate in
+ * query filters — `countDocuments({ isActive: true })` would match nothing and
+ * silently report zero active parents forever. Every predicate here is now
+ * expressed against the real, indexed `status` field.
+ *
+ * Semantics preserved:
+ *   old (isActive && isActivated)  →  status === 'active'
+ *   old (isActivated)              →  status in ['active', 'suspended']
+ *                                     (a suspended parent HAS activated —
+ *                                      that is what makes suspension distinct
+ *                                      from pending)
  */
 const Parent = require('../../models/Parent');
 const Student = require('../../models/Student');
 const LeaveRequest = require('../../models/LeaveRequest');
 
+const EVER_ACTIVATED = { $in: ['active', 'suspended'] };
+
 async function schoolParentStats({ schoolId }) {
   const thirtyDaysAgo = new Date(Date.now() - 30 * 86400000);
-  const [total, active, recentlyActive, pendingLeave] = await Promise.all([
+  const [total, active, pending, suspended, recentlyActive, pendingLeave] = await Promise.all([
     Parent.countDocuments({ 'linkedStudents.schoolId': schoolId }),
-    Parent.countDocuments({ 'linkedStudents.schoolId': schoolId, isActive: true, isActivated: true }),
+    Parent.countDocuments({ 'linkedStudents.schoolId': schoolId, status: 'active' }),
+    Parent.countDocuments({ 'linkedStudents.schoolId': schoolId, status: 'pending' }),
+    Parent.countDocuments({ 'linkedStudents.schoolId': schoolId, status: 'suspended' }),
     Parent.countDocuments({ 'linkedStudents.schoolId': schoolId, lastLoginAt: { $gte: thirtyDaysAgo } }),
     LeaveRequest.countDocuments({ schoolId, status: 'pending' }),
   ]);
   return {
     totalParentAccounts: total,
     activeParentAccounts: active,
+    pendingParentAccounts: pending,
+    suspendedParentAccounts: suspended,
     portalUsageLast30Days: recentlyActive,
     portalUsageRatePct: total > 0 ? +((recentlyActive / total) * 100).toFixed(1) : 0,
     pendingLeaveRequests: pendingLeave,
@@ -27,7 +47,7 @@ async function platformParentStats() {
   const thirtyDaysAgo = new Date(Date.now() - 30 * 86400000);
   const [total, activated, loggedInEver, recentlyActive, totalStudents] = await Promise.all([
     Parent.countDocuments({}),
-    Parent.countDocuments({ isActivated: true }),
+    Parent.countDocuments({ status: EVER_ACTIVATED }),
     Parent.countDocuments({ lastLoginAt: { $ne: null } }),
     Parent.countDocuments({ lastLoginAt: { $gte: thirtyDaysAgo } }),
     Student.countDocuments({ status: 'active' }),

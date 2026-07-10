@@ -1,8 +1,9 @@
 const { Resend } = require('resend');
+const brand = require('../config/brand');
 
 // Lazy init — prevents crash on module load when RESEND_API_KEY not yet set
 const getClient = () => new Resend(process.env.RESEND_API_KEY);
-const FROM = () => process.env.EMAIL_FROM || 'TeacherAttendance <no-reply@teacherattendance.com>';
+const FROM = () => brand.emailFrom();
 
 // ── Shared design tokens ─────────────────────────────────────────────────────
 const BRAND = {
@@ -32,7 +33,7 @@ const baseWrapper = (bodyContent) => `
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <meta http-equiv="X-UA-Compatible" content="IE=edge" />
-  <title>TeacherAttendance</title>
+  <title>${brand.brandName()}</title>
 </head>
 <body style="margin:0;padding:0;background-color:${BRAND.bg};font-family:'Segoe UI',Arial,sans-serif;">
   <table width="100%" cellpadding="0" cellspacing="0" role="presentation" style="background-color:${BRAND.bg};padding:40px 16px;">
@@ -46,7 +47,7 @@ const baseWrapper = (bodyContent) => `
               <table width="100%" cellpadding="0" cellspacing="0">
                 <tr>
                   <td>
-                    <p style="margin:0;font-size:22px;font-weight:700;color:${BRAND.white};letter-spacing:-0.3px;">Teacher<span style="color:${BRAND.teal};">Attendance</span></p>
+                    <p style="margin:0;font-size:22px;font-weight:700;color:${BRAND.white};letter-spacing:-0.3px;">${brand.brandName()}</p>
                     <p style="margin:5px 0 0;font-size:12px;color:#93C5FD;letter-spacing:0.6px;text-transform:uppercase;">School Attendance Management</p>
                   </td>
                   <td align="right">
@@ -68,8 +69,8 @@ const baseWrapper = (bodyContent) => `
           <tr>
             <td style="background:#F8FAFC;border:1px solid ${BRAND.border};border-top:none;border-radius:0 0 12px 12px;padding:20px 36px;text-align:center;">
               <p style="margin:0 0 6px;font-size:12px;color:${BRAND.textMuted};">
-                © ${new Date().getFullYear()} TeacherAttendance &nbsp;·&nbsp;
-                <a href="https://teacherattendance.com" style="color:${BRAND.tealDark};text-decoration:none;">teacherattendance.com</a>
+                © ${new Date().getFullYear()} ${brand.brandName()} &nbsp;·&nbsp;
+                <a href="${brand.siteUrl()}" style="color:${BRAND.tealDark};text-decoration:none;">${brand.siteHost()}</a>
               </p>
               <p style="margin:0;font-size:11px;color:#C1CBD8;">Empowering schools across Africa with modern attendance tracking.</p>
             </td>
@@ -106,7 +107,7 @@ const sendSchoolInviteEmail = async ({ toEmail, schoolName, inviteLink }) => {
     <p style="margin:0 0 20px;font-size:13px;color:${BRAND.tealDark};font-weight:600;text-transform:uppercase;letter-spacing:0.5px;">School Admin Invitation</p>
 
     <p style="color:${BRAND.textMid};font-size:15px;line-height:1.7;margin:0 0 12px;">
-      You've been selected to manage <strong style="color:${BRAND.textDark};">${schoolName}</strong> on the TeacherAttendance platform — a modern, streamlined system for tracking teacher attendance across your school.
+      You've been selected to manage <strong style="color:${BRAND.textDark};">${schoolName}</strong> on the ${brand.brandName()} platform — a modern, streamlined system for tracking teacher attendance across your school.
     </p>
     <p style="color:${BRAND.textMid};font-size:15px;line-height:1.7;margin:0 0 4px;">
       Click the button below to complete your registration and set up your school account.
@@ -126,7 +127,7 @@ const sendSchoolInviteEmail = async ({ toEmail, schoolName, inviteLink }) => {
   await getClient().emails.send({
     from: FROM(),
     to: toEmail,
-    subject: `You're invited to manage ${schoolName} on TeacherAttendance`,
+    subject: `You're invited to manage ${schoolName} on ${brand.brandName()}`,
     html: baseWrapper(body),
   });
 };
@@ -139,7 +140,7 @@ const sendPasswordResetEmail = async ({ toEmail, resetLink, role }) => {
     <p style="margin:0 0 20px;font-size:13px;color:${BRAND.tealDark};font-weight:600;text-transform:uppercase;letter-spacing:0.5px;">${roleLabel} Account</p>
 
     <p style="color:${BRAND.textMid};font-size:15px;line-height:1.7;margin:0 0 12px;">
-      We received a request to reset the password for your <strong>${roleLabel}</strong> account on TeacherAttendance. If this was you, click below to set a new password.
+      We received a request to reset the password for your <strong>${roleLabel}</strong> account on ${brand.brandName()}. If this was you, click below to set a new password.
     </p>
 
     <div style="background:${BRAND.successBg};border:1px solid ${BRAND.successBorder};border-radius:8px;padding:14px 18px;margin:20px 0;">
@@ -153,8 +154,8 @@ const sendPasswordResetEmail = async ({ toEmail, resetLink, role }) => {
     <div style="background:${BRAND.errorBg};border-left:4px solid #EF4444;border-radius:6px;padding:14px 18px;margin-top:24px;">
       <p style="margin:0 0 4px;font-size:13px;font-weight:700;color:${BRAND.errorText};">⚠️ Didn't request this?</p>
       <p style="margin:0;font-size:13px;color:${BRAND.errorText};line-height:1.6;">
-        Your account may be at risk. Contact TeacherAttendance support immediately at
-        <a href="https://teacherattendance.com" style="color:${BRAND.errorText};font-weight:600;">teacherattendance.com</a>.
+        Your account may be at risk. Contact ${brand.brandName()} support immediately at
+        <a href="${brand.siteUrl()}" style="color:${BRAND.errorText};font-weight:600;">${brand.siteHost()}</a>.
       </p>
     </div>
 
@@ -164,7 +165,7 @@ const sendPasswordResetEmail = async ({ toEmail, resetLink, role }) => {
   await getClient().emails.send({
     from: FROM(),
     to: toEmail,
-    subject: 'Password Reset Request — TeacherAttendance',
+    subject: `Password Reset Request — ${brand.brandName()}`,
     html: baseWrapper(body),
   });
 };
@@ -176,7 +177,7 @@ const sendTeacherWelcomeEmail = async ({ toEmail, teacherName, schoolName, tempP
     <p style="margin:0 0 20px;font-size:13px;color:${BRAND.tealDark};font-weight:600;text-transform:uppercase;letter-spacing:0.5px;">Your account is ready</p>
 
     <p style="color:${BRAND.textMid};font-size:15px;line-height:1.7;margin:0 0 16px;">
-      Your TeacherAttendance account has been created for <strong style="color:${BRAND.textDark};">${schoolName}</strong>. Download the mobile app and log in with the credentials below.
+      Your ${brand.brandName()} account has been created for <strong style="color:${BRAND.textDark};">${schoolName}</strong>. Download the mobile app and log in with the credentials below.
     </p>
 
     <!-- Credentials card -->
@@ -213,12 +214,12 @@ const sendTeacherWelcomeEmail = async ({ toEmail, teacherName, schoolName, tempP
     </div>
 
     ${divider}
-    <p style="color:${BRAND.textMuted};font-size:12px;margin:0;">Need help? Contact your school administrator or visit teacherattendance.com.</p>
+    <p style="color:${BRAND.textMuted};font-size:12px;margin:0;">Need help? Contact your school administrator or visit ${brand.siteHost()}.</p>
   `;
   await getClient().emails.send({
     from: FROM(),
     to: toEmail,
-    subject: `Your TeacherAttendance account for ${schoolName}`,
+    subject: `Your ${brand.brandName()} account for ${schoolName}`,
     html: baseWrapper(body),
   });
 };
@@ -240,7 +241,7 @@ const sendInquiryAdminEmail = async ({ inquiry }) => {
 
   const body = `
     <div style="background:${BRAND.successBg};border:1px solid ${BRAND.successBorder};border-radius:8px;padding:14px 18px;margin-bottom:24px;">
-      <p style="margin:0;font-size:14px;font-weight:700;color:#0f766e;">🆕 New inquiry submitted from teacherattendance.com</p>
+      <p style="margin:0;font-size:14px;font-weight:700;color:#0f766e;">🆕 New inquiry submitted from ${brand.siteHost()}</p>
     </div>
 
     <h2 style="margin:0 0 4px;font-size:22px;font-weight:700;color:${BRAND.textDark};">${inquiry.schoolName}</h2>
@@ -262,7 +263,7 @@ const sendInquiryAdminEmail = async ({ inquiry }) => {
     </div>
 
     ${divider}
-    <p style="color:${BRAND.textMuted};font-size:12px;margin:0;">This is an automated notification from TeacherAttendance.</p>
+    <p style="color:${BRAND.textMuted};font-size:12px;margin:0;">This is an automated notification from ${brand.brandName()}.</p>
   `;
 
   await getClient().emails.send({
@@ -334,12 +335,12 @@ const sendInquiryConfirmationEmail = async ({ inquiry }) => {
     </div>
 
     ${divider}
-    <p style="color:${BRAND.textMuted};font-size:12px;margin:0;">Questions? Reply to this email or visit <a href="https://teacherattendance.com" style="color:${BRAND.tealDark};">teacherattendance.com</a>.</p>
+    <p style="color:${BRAND.textMuted};font-size:12px;margin:0;">Questions? Reply to this email or visit <a href="${brand.siteUrl()}" style="color:${BRAND.tealDark};">${brand.siteHost()}</a>.</p>
   `;
   await getClient().emails.send({
     from: FROM(),
     to: inquiry.email,
-    subject: 'We received your inquiry — TeacherAttendance',
+    subject: `We received your inquiry — ${brand.brandName()}`,
     html: baseWrapper(body),
   });
 };
@@ -371,7 +372,7 @@ const sendStudentAttendanceEmail = async ({
       <strong style="color:${BRAND.textDark};">${studentName}</strong> (ID: ${studentIdNumber}, ${className} - ${sectionName}) ${l.verb} at <strong>${time}</strong> on ${date}.
     </p>
     ${divider}
-    <p style="color:${BRAND.textMuted};font-size:12px;margin:0;">This is an automated notification from ${schoolName}, sent via the TeacherAttendance platform.</p>
+    <p style="color:${BRAND.textMuted};font-size:12px;margin:0;">This is an automated notification from ${schoolName}, sent via the ${brand.brandName()} platform.</p>
   `;
   await getClient().emails.send({
     from: FROM(),
@@ -426,7 +427,7 @@ const sendReportReadyEmail = async ({ toEmail, schoolName, schoolLogoUrl, studen
     </p>
     ${ctaButton(downloadUrl, 'Download Report →')}
     ${divider}
-    <p style="color:${BRAND.textMuted};font-size:12px;margin:0;">Sent by ${schoolName} via the TeacherAttendance platform.</p>
+    <p style="color:${BRAND.textMuted};font-size:12px;margin:0;">Sent by ${schoolName} via the ${brand.brandName()} platform.</p>
   `;
   await getClient().emails.send({
     from: FROM(),
@@ -447,7 +448,7 @@ const sendPromotionEmail = async ({ toEmail, schoolName, schoolLogoUrl, studentN
       <strong style="color:${BRAND.textDark};">${studentName}</strong> has been promoted to <strong>${newClassName}</strong>. Congratulations!
     </p>
     ${divider}
-    <p style="color:${BRAND.textMuted};font-size:12px;margin:0;">Sent by ${schoolName} via the TeacherAttendance platform.</p>
+    <p style="color:${BRAND.textMuted};font-size:12px;margin:0;">Sent by ${schoolName} via the ${brand.brandName()} platform.</p>
   `;
   await getClient().emails.send({ from: FROM(), to: toEmail, subject: `${studentName} promoted to ${newClassName}`, html: baseWrapper(body) });
 };

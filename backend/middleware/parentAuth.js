@@ -5,6 +5,11 @@
  * that names a student goes through `requireChild`, which derives the school
  * from the ownership link — never from client input — so cross-parent and
  * cross-school access are both structurally impossible.
+ *
+ * STATUS GATE: previously `!parent.isActive`. Now `status !== 'active'`, which
+ * additionally revokes the session of a parent suspended mid-session. Their JWT
+ * remains cryptographically valid until it expires; THIS check is what actually
+ * ends their access.
  */
 
 const jwt = require('jsonwebtoken');
@@ -22,8 +27,20 @@ async function protectParent(req, res, next) {
       return res.status(403).json({ success: false, message: 'Not a parent session.' });
     }
     const parent = await Parent.findById(decoded.parentId);
-    if (!parent || !parent.isActive) {
-      return res.status(401).json({ success: false, message: 'Parent account not found or inactive.' });
+    if (!parent) {
+      return res.status(401).json({ success: false, message: 'Parent account not found.' });
+    }
+    if (parent.status !== 'active') {
+      // 403, not 401: the credential is valid, the account is not permitted.
+      // Returning `status` lets the portal route the user to the right screen
+      // (activation vs "contact your school") instead of a bare logout loop.
+      return res.status(403).json({
+        success: false,
+        message: parent.status === 'suspended'
+          ? 'Your portal access has been suspended. Please contact your school administrator.'
+          : 'Your account has not been activated yet.',
+        status: parent.status,
+      });
     }
     req.parent = parent;
     next();

@@ -1,8 +1,29 @@
 const Teacher = require('../models/Teacher');
 const School = require('../models/School');
+const SchoolClass = require('../models/SchoolClass');
 const AttendanceRecord = require('../models/AttendanceRecord');
 const { sendTeacherWelcomeEmail } = require('../utils/email');
 const { logEvent } = require('../utils/audit');
+const { getPagination, buildPaginatedResponse } = require('../utils/pagination');
+const { prefixRegex, normaliseSearchTerm } = require('../utils/searchQuery');
+
+/**
+ * Detach a teacher from every class where they are the class teacher.
+ *
+ * WHY THIS EXISTS: Teacher documents are HARD-deleted (deleteTeacher,
+ * resolveDeletionRequest → approve). SchoolClass.classTeacher is an ObjectId
+ * ref with no database-level foreign key, so a delete would leave a dangling
+ * pointer that `.populate()` silently resolves to `null` — a class that looks
+ * unassigned but still holds a ghost id. Every hard-delete path calls this
+ * first, inside the same request, before the Teacher row disappears.
+ */
+async function detachTeacherFromClasses(schoolId, teacherId) {
+  const result = await SchoolClass.updateMany(
+    { schoolId, classTeacher: teacherId },
+    { $set: { classTeacher: null, classTeacherAssignedAt: null, classTeacherAssignedBy: null } }
+  );
+  return result.modifiedCount || 0;
+}
 
 // ─── CREATE TEACHER ─────────────────────────────────────────────────────────
 exports.createTeacher = async (req, res) => {
@@ -56,18 +77,61 @@ exports.createTeacher = async (req, res) => {
 };
 
 // ─── GET ALL TEACHERS ───────────────────────────────────────────────────────
+/**
+ * GET /api/teachers?search=&isActive=&page=&limit=
+ *
+ * RESPONSE SHAPE IS BACKWARDS COMPATIBLE. The original contract —
+ * { success, total, maxTeachers, teachers } — is preserved exactly, because
+ * TeachersPage.jsx and the teacher analytics UI read `teachers` directly.
+ * We ADD `results` / `page` / `limit` / `totalPages` alongside it so the new
+ * searchable selector can paginate. Existing callers that pass no page/limit
+ * still receive the full list (limit defaults high enough to be a no-op for
+ * schools under the 1,000-teacher target).
+ *
+ * SEARCH (widened): was `filter.name = { $regex: search }` — name only, and
+ * unanchored, so it scanned the collection. Now an anchored $or across
+ * name / email / phone, served by the compound indexes in models/Teacher.js.
+ */
 exports.getTeachers = async (req, res) => {
   try {
     const { schoolId } = req.user;
-    const { search, isActive } = req.query;
+    const { isActive } = req.query;
+    const term = normaliseSearchTerm(req.query.search);
+
     const filter = { schoolId };
-    if (search) filter.name = { $regex: search, $options: 'i' };
     if (isActive !== undefined) filter.isActive = isActive === 'true';
 
-    const teachers = await Teacher.find(filter).select('-passwordHash').sort({ name: 1 });
+    if (term) {
+      filter.$or = [
+        { name: prefixRegex(term, { wordBoundary: true }) },
+        { email: prefixRegex(term) },
+        { phone: prefixRegex(term) },
+      ];
+    }
+
+    // Pagination is OPT-IN: only applied when the caller asks for it, so the
+    // legacy "give me every teacher" call keeps working untouched.
+    const wantsPaging = req.query.page !== undefined || req.query.limit !== undefined;
+
+    let teachers;
+    let total;
+
+    if (wantsPaging) {
+      const { page, limit, skip } = getPagination(req.query);
+      [teachers, total] = await Promise.all([
+        Teacher.find(filter).select('-passwordHash').sort({ name: 1 }).skip(skip).limit(limit),
+        Teacher.countDocuments(filter),
+      ]);
+      const school = await School.findOne({ schoolId });
+      const body = buildPaginatedResponse(teachers, total, page, limit);
+      return res.json({ ...body, teachers, maxTeachers: school?.maxTeachers });
+    }
+
+    teachers = await Teacher.find(filter).select('-passwordHash').sort({ name: 1 });
+    total = teachers.length;
     const school = await School.findOne({ schoolId });
 
-    res.json({ success: true, total: teachers.length, maxTeachers: school.maxTeachers, teachers });
+    res.json({ success: true, total, maxTeachers: school?.maxTeachers, teachers, results: teachers });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }
@@ -86,6 +150,12 @@ exports.getTeacher = async (req, res) => {
 };
 
 // ─── UPDATE TEACHER ─────────────────────────────────────────────────────────
+/**
+ * Deactivating (isActive → false) a teacher who currently holds a class ALSO
+ * detaches them. assignClassTeacher refuses to assign an inactive teacher, so
+ * leaving an inactive teacher attached would create a state the assign path
+ * itself considers illegal.
+ */
 exports.updateTeacher = async (req, res) => {
   try {
     const { schoolId } = req.user;
@@ -105,6 +175,11 @@ exports.updateTeacher = async (req, res) => {
       { new: true, runValidators: true }
     ).select('-passwordHash');
 
+    let detachedClasses = 0;
+    if (isActive === false && oldTeacher.isActive === true) {
+      detachedClasses = await detachTeacherFromClasses(schoolId, teacher._id);
+    }
+
     const changes = {};
     if (name !== undefined && name !== oldTeacher.name) changes.name = { from: oldTeacher.name, to: name };
     if (phone !== undefined && phone !== oldTeacher.phone) changes.phone = { from: oldTeacher.phone, to: phone };
@@ -114,10 +189,17 @@ exports.updateTeacher = async (req, res) => {
       targetType: 'teacher',
       targetId: teacher._id,
       targetName: teacher.name,
-      metadata: { changes },
+      metadata: { changes, detachedClasses },
     });
 
-    res.json({ success: true, message: 'Teacher updated.', teacher });
+    res.json({
+      success: true,
+      message: detachedClasses
+        ? `Teacher updated. Removed as class teacher from ${detachedClasses} class(es).`
+        : 'Teacher updated.',
+      teacher,
+      detachedClasses,
+    });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }
@@ -150,6 +232,11 @@ exports.resetTeacherPassword = async (req, res) => {
 exports.deleteTeacher = async (req, res) => {
   try {
     const { schoolId } = req.user;
+
+    // Detach BEFORE the document disappears — otherwise SchoolClass.classTeacher
+    // holds an id that resolves to nothing.
+    const detachedClasses = await detachTeacherFromClasses(schoolId, req.params.id);
+
     const teacher = await Teacher.findOneAndDelete({ _id: req.params.id, schoolId });
     if (!teacher) return res.status(404).json({ success: false, message: 'Teacher not found.' });
 
@@ -157,10 +244,16 @@ exports.deleteTeacher = async (req, res) => {
       targetType: 'teacher',
       targetId: req.params.id,
       targetName: teacher.name,
-      metadata: { email: teacher.email, phone: teacher.phone },
+      metadata: { email: teacher.email, phone: teacher.phone, detachedClasses },
     });
 
-    res.json({ success: true, message: 'Teacher deleted successfully.' });
+    res.json({
+      success: true,
+      message: detachedClasses
+        ? `Teacher deleted. Removed as class teacher from ${detachedClasses} class(es).`
+        : 'Teacher deleted successfully.',
+      detachedClasses,
+    });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }
@@ -317,11 +410,18 @@ exports.resolveDeletionRequest = async (req, res) => {
     if (!teacher) return res.status(404).json({ success: false, message: 'Teacher not found.' });
     if (!teacher.deletionRequest || !teacher.deletionRequest.requested)
       return res.status(400).json({ success: false, message: 'No pending deletion request.' });
+
     if (action === 'approve') {
+      // Same dangling-ref hazard as deleteTeacher — detach first.
+      const detachedClasses = await detachTeacherFromClasses(schoolId, id);
       await Teacher.findOneAndDelete({ _id: id, schoolId });
-      await logEvent(req, 'teacher.deletion.approved', { targetType:'teacher', targetId:id, targetName:teacher.name, metadata:{ email:teacher.email } });
-      return res.json({ success: true, message: 'Teacher account deleted.' });
+      await logEvent(req, 'teacher.deletion.approved', {
+        targetType:'teacher', targetId:id, targetName:teacher.name,
+        metadata:{ email:teacher.email, detachedClasses },
+      });
+      return res.json({ success: true, message: 'Teacher account deleted.', detachedClasses });
     }
+
     teacher.deletionRequest.status     = 'rejected';
     teacher.deletionRequest.resolvedAt = new Date();
     teacher.deletionRequest.resolvedBy = req.user.email;
@@ -349,3 +449,6 @@ exports.updateMySchoolDetails = async (req, res) => {
     res.json({ success: true, message: 'School details updated.', school: { ...school.toObject(), teacherCount } });
   } catch (err) { res.status(500).json({ success: false, message: err.message }); }
 };
+
+// Exported for reuse/testing.
+exports._detachTeacherFromClasses = detachTeacherFromClasses;

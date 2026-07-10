@@ -1,8 +1,10 @@
 const Student = require('../models/Student');
 const School = require('../models/School');
+const RfidCard = require('../models/RfidCard');
 const SubscriptionPlan = require('../models/SubscriptionPlan');
 const { logEvent } = require('../utils/audit');
 const { getPagination, buildPaginatedResponse } = require('../utils/pagination');
+const { prefixRegex, normaliseSearchTerm } = require('../utils/searchQuery');
 // Reuse the SAME Cloudinary instance the upload preset is built on — this is
 // only for deleting the previous asset on photo replace/remove (no new upload
 // system is introduced).
@@ -71,22 +73,79 @@ exports.createStudent = async (req, res) => {
   }
 };
 
+/**
+ * Resolve the student ids whose ACTIVE RFID card number starts with `term`.
+ *
+ * rfidNumber lives on RfidCard, not Student — Student only carries an
+ * `activeRfidCard` ObjectId pointer. So an RFID search is necessarily a
+ * two-step: find matching cards in this school, then match their `student`
+ * refs. RfidCard is indexed on { schoolId, status } and is an order of
+ * magnitude smaller than Student, so this stays cheap.
+ *
+ * Returns [] when nothing matches, which the caller folds into the $or as a
+ * dead branch rather than skipping (a skipped branch would wrongly widen the
+ * result set).
+ */
+async function studentIdsMatchingRfid(schoolId, term) {
+  const rx = prefixRegex(term);
+  if (!rx) return [];
+  const cards = await RfidCard.find({
+    schoolId,
+    rfidNumber: rx,
+    student: { $ne: null },
+  }).select('student').limit(200).lean();
+  return cards.map((c) => c.student);
+}
+
+/**
+ * GET /api/students?search=&classId=&section=&status=&page=&limit=
+ *
+ * Response shape is UNCHANGED: the standard paginated envelope from
+ * utils/pagination.js — { success, total, page, limit, totalPages, results }.
+ *
+ * SEARCH BEHAVIOUR (rewritten)
+ * Previously: `filter.$text = { $search: search }` against a `{ name: 'text' }`
+ * index. That could not power a type-ahead selector:
+ *   • $text matches whole stemmed tokens — "Joh" never matched "John".
+ *   • studentId / admissionNumber were not in the index at all.
+ *   • RFID was unreachable (different collection).
+ *
+ * Now: an anchored, case-insensitive regex $or across name, studentId and
+ * admissionNumber, plus an id-set from the RfidCard lookup above. Anchored
+ * regexes are served as index range scans by the compound indexes declared in
+ * models/Student.js, so this stays sub-linear at 10,000+ students.
+ *
+ * `name` is anchored at any WORD boundary so typing "Smith" finds
+ * "John Smith". Identifier fields are anchored at the string start only,
+ * because a partial match in the middle of an ID is never what a user means.
+ */
 exports.getStudents = async (req, res) => {
   try {
     const { schoolId } = req.user;
-    const { search, classId, section, status } = req.query;
+    const { classId, section, status } = req.query;
     const { page, limit, skip } = getPagination(req.query);
+    const term = normaliseSearchTerm(req.query.search);
 
     const filter = { schoolId };
     if (classId) filter.class = classId;
     if (section) filter.section = section;
     filter.status = status || 'active';
-    if (search) filter.$text = { $search: search };
+
+    if (term) {
+      const rfidStudentIds = await studentIdsMatchingRfid(schoolId, term);
+      filter.$or = [
+        { name: prefixRegex(term, { wordBoundary: true }) },
+        { studentId: prefixRegex(term) },
+        { admissionNumber: prefixRegex(term) },
+        { _id: { $in: rfidStudentIds } },
+      ];
+    }
 
     const [results, total] = await Promise.all([
       Student.find(filter)
         .populate('class', 'name')
         .populate('section', 'name')
+        .populate('activeRfidCard', 'rfidNumber status')
         .sort({ name: 1 })
         .skip(skip)
         .limit(limit),

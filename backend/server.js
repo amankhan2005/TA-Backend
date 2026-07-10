@@ -6,6 +6,7 @@ const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
 const connectDB = require('./config/db');
 const errorHandler = require('./middleware/errorHandler');
+const brand = require('./config/brand');
 
 // Route imports
 const authRoutes          = require('./routes/auth');
@@ -55,28 +56,12 @@ connectDB();
 app.use(helmet());
 
  
-// Reduce a full frontend URL (which may include a subpath such as
-// ".../parent" or ".../schooladmin") down to its origin — scheme + host + port.
-// Browsers send only the origin in the Origin header, so one origin entry
-// covers every subpath-deployed app on that domain (/parent, /admin, ...).
-const originOf = (url) => { try { return new URL(url).origin; } catch { return null; } };
-
-const allowedOrigins = [
-  // Derived from configuration so a new production domain (e.g. mydomain.com,
-  // hosting /parent and /admin together) works without editing code.
-  originOf(process.env.PARENT_PORTAL_URL),
-  originOf(process.env.FRONTEND_SCHOOL_ADMIN_URL),
-  originOf(process.env.FRONTEND_SUPER_ADMIN_URL),
-  originOf(process.env.FRONTEND_URL),
-
-  // Local development defaults
-  'http://localhost:5173',   // website / super admin local
-  'http://localhost:5174',   // school admin local
-  'http://localhost:5175',   // parent portal local
-
-  // Netlify preview URLs (add your actual Netlify app hostnames here)
-  'https://teachertattendance.netlify.app',
-].filter(Boolean);
+// The full allowlist — production origins (liberiaschoolhub.com and the
+// api/parent/schooladmin hosts), any EXTRA_CORS_ORIGINS, and localhost dev
+// ports — is centralised in config/brand.js so the domain lives in exactly
+// one place. Subpath apps (/parent, /schooladmin) collapse to one origin,
+// which is all the browser's Origin header carries.
+const allowedOrigins = brand.allowedOrigins();
 
 const corsOptions = {
   origin(origin, callback) {

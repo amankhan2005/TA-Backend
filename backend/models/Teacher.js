@@ -26,6 +26,15 @@ const teacherSchema = new mongoose.Schema({
   },
 }, { timestamps: true });
 
+// ── Searchable-dropdown indexes ─────────────────────────────────────────────
+// getTeachers now searches name / email / phone with anchored regexes. `email`
+// already carries a unique index, so only name and phone need covering. The
+// leading schoolId equality predicate matches the filter the controller always
+// applies, letting an anchored /^term/ seek an index range instead of scanning.
+teacherSchema.index({ schoolId: 1, name: 1 });
+teacherSchema.index({ schoolId: 1, phone: 1 });
+teacherSchema.index({ schoolId: 1, isActive: 1 });
+
 teacherSchema.pre('save', async function (next) {
   if (!this.isModified('passwordHash')) return next();
   this.passwordHash = await bcrypt.hash(this.passwordHash, 12);

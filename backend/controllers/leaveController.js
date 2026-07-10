@@ -3,6 +3,18 @@
  * for their OWN children (ownership already enforced by requireChild); school
  * admins review (approve/reject). Leave never mutates attendance — it's an
  * informational request trail.
+ *
+ * ── WHY THIS FILE CHANGED ───────────────────────────────────────────────────
+ * `listForSchool` populated the parent with
+ *   select: '... isActive isActivated ...'
+ * and then called `.lean()`. Those two fields are now VIRTUALS on the Parent
+ * model, and `.lean()` bypasses virtuals entirely — the populated parent would
+ * have arrived with both keys `undefined`, silently rendering every parent's
+ * activation badge as "not activated" in the admin UI.
+ *
+ * We now select the real `status` field, and additionally derive the two legacy
+ * booleans by hand onto the lean object so any client still reading them keeps
+ * working. `status` is the field new code should read.
  */
 const LeaveRequest = require('../models/LeaveRequest');
 const Student = require('../models/Student');
@@ -76,7 +88,9 @@ exports.listForSchool = async (req, res) => {
         })
         .populate({
           path: 'parent',
-          select: 'name email mobileNumber isActive isActivated lastLoginAt linkedStudents',
+          // `status` is the real field. isActive/isActivated are virtuals and
+          // would be dropped by .lean() — we derive them below instead.
+          select: 'name email mobileNumber status lastLoginAt linkedStudents',
         })
         .lean(),
       LeaveRequest.countDocuments(filter),
@@ -90,7 +104,15 @@ exports.listForSchool = async (req, res) => {
       const links = lr.parent && Array.isArray(lr.parent.linkedStudents) ? lr.parent.linkedStudents : [];
       const link = links.find((l) => String(l.student) === sid);
       const relation = link ? link.relation : null;
-      if (lr.parent && lr.parent.linkedStudents) delete lr.parent.linkedStudents;
+
+      if (lr.parent) {
+        // Re-materialise the legacy booleans for older clients. New code should
+        // read `parent.status` directly.
+        lr.parent.isActive = lr.parent.status === 'active';
+        lr.parent.isActivated = lr.parent.status === 'active' || lr.parent.status === 'suspended';
+        if (lr.parent.linkedStudents) delete lr.parent.linkedStudents;
+      }
+
       return { ...lr, relation };
     });
 

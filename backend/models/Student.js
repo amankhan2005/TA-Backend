@@ -2,10 +2,29 @@ const mongoose = require('mongoose');
 
 /**
  * Student — core profile. RFID lifecycle detail (history, device type) lives
- * in RfidCard (Phase 3, not yet built) — `activeRfidCard` here is just a
- * denormalized pointer for fast lookups; RfidCard is the source of truth.
- * Same relationship pattern the existing codebase uses elsewhere (e.g. a
- * Teacher document doesn't embed its own AttendanceRecord history).
+ * in RfidCard (Phase 3) — `activeRfidCard` here is just a denormalized
+ * pointer for fast lookups; RfidCard is the source of truth. Same
+ * relationship pattern the existing codebase uses elsewhere (e.g. a Teacher
+ * document doesn't embed its own AttendanceRecord history).
+ *
+ * ── SEARCH INDEXES (replaces the old `{ name: 'text' }` index) ──────────────
+ * The previous text index could not support a type-ahead selector:
+ *
+ *   1. `$text` matches whole stemmed TOKENS. Typing "Joh" returns zero results
+ *      for a student named "John" — there is no prefix matching in $text.
+ *   2. Only `name` was indexed, so searching by studentId or admissionNumber
+ *      was impossible.
+ *
+ * The searchable dropdown needs anchored-prefix matching across three fields,
+ * which a text index cannot provide. These compound indexes are ordered
+ * { schoolId, status, <field> } to match the exact filter shape that
+ * studentController.getStudents always applies (schoolId is always set, status
+ * always defaults to 'active'), so an anchored /^term/ regex on <field> is an
+ * index range scan rather than a collection scan.
+ *
+ * MIGRATION: Mongoose never DROPS an index it no longer declares. The old
+ * `name_text` index must be removed explicitly — see scripts/migrateParentStatus.js,
+ * which performs both the parent backfill and this index drop in one run.
  */
 
 const studentSchema = new mongoose.Schema(
@@ -60,6 +79,17 @@ const studentSchema = new mongoose.Schema(
 studentSchema.index({ schoolId: 1, admissionNumber: 1 }, { unique: true });
 studentSchema.index({ schoolId: 1, class: 1, section: 1 });
 studentSchema.index({ schoolId: 1, status: 1 });
-studentSchema.index({ name: 'text' });
+
+// ── Searchable-dropdown indexes (see header note) ───────────────────────────
+// Field order matters: the two equality predicates first, the ranged/regex
+// field last. Anchored (^term) regexes seek; unanchored ones scan.
+studentSchema.index({ schoolId: 1, status: 1, name: 1 });
+studentSchema.index({ schoolId: 1, status: 1, studentId: 1 });
+studentSchema.index({ schoolId: 1, status: 1, admissionNumber: 1 });
+
+// Supports resolving a set of students from an RFID card lookup
+// ($in on _id is served by the primary key, but this covers the
+// activeRfidCard reverse direction used by the profile pages).
+studentSchema.index({ schoolId: 1, activeRfidCard: 1 });
 
 module.exports = mongoose.model('Student', studentSchema);

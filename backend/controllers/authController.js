@@ -6,6 +6,7 @@ const { generateToken: genJWT } = require('../middleware/auth');
 const { generateToken, verifyToken, getResetExpiry } = require('../utils/token');
 const { sendPasswordResetEmail } = require('../utils/email');
 const { logEvent } = require('../utils/audit');
+const brand = require('../config/brand');
 
 // ─── SUPER ADMIN LOGIN ──────────────────────────────────────────────────────
 exports.superAdminLogin = async (req, res) => {
@@ -111,10 +112,10 @@ exports.forgotPassword = async (req, res) => {
 
     if (role === 'superAdmin') {
       user = await SuperAdmin.findOne({ email: email.toLowerCase() });
-      frontendUrl = process.env.FRONTEND_SUPER_ADMIN_URL;
+      frontendUrl = brand.superAdminUrl();
     } else {
       user = await SchoolAdmin.findOne({ email: email.toLowerCase() });
-      frontendUrl = process.env.FRONTEND_SCHOOL_ADMIN_URL;
+      frontendUrl = brand.schoolAdminUrl();
     }
 
     if (!user) {

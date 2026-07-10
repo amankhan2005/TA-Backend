@@ -9,6 +9,7 @@ const { generateToken, verifyToken, getInviteExpiry } = require('../utils/token'
 const { sendSchoolInviteEmail } = require('../utils/email');
 const { cloudinary } = require('../config/cloudinary');
 const { logEvent } = require('../utils/audit');
+const brand = require('../config/brand');
 
 // ─── SEND SCHOOL INVITATION ─────────────────────────────────────────────────
 exports.inviteSchool = async (req, res) => {
@@ -41,7 +42,7 @@ exports.inviteSchool = async (req, res) => {
       status: 'inactive',
     });
 
-    const inviteLink = `${process.env.FRONTEND_SCHOOL_ADMIN_URL}/register?token=${rawToken}&schoolId=${schoolId}`;
+    const inviteLink = `${brand.schoolAdminUrl()}/register?token=${rawToken}&schoolId=${schoolId}`;
     await sendSchoolInviteEmail({ toEmail: adminEmail, schoolName, inviteLink });
 
     await logEvent(req, 'school.invite.sent', {
@@ -72,7 +73,7 @@ exports.resendInvite = async (req, res) => {
     school.inviteTokenExpiry = getInviteExpiry();
     await school.save();
 
-    const inviteLink = `${process.env.FRONTEND_SCHOOL_ADMIN_URL}/register?token=${rawToken}&schoolId=${schoolId}`;
+    const inviteLink = `${brand.schoolAdminUrl()}/register?token=${rawToken}&schoolId=${schoolId}`;
     await sendSchoolInviteEmail({ toEmail: school.inviteEmail, schoolName: school.name, inviteLink });
 
     await logEvent(req, 'school.invite.resent', {
