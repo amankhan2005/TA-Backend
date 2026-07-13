@@ -23,11 +23,11 @@ const stripTrailingSlash = (url) => String(url || '').replace(/\/+$/, '');
 
 // Production defaults. Any of these can be overridden per-environment.
 const DEFAULTS = {
-  SITE_URL: 'https://liberiaschoolhub.com',
+  SITE_URL: 'www.liberiaschoolhub.com',
   API_URL: 'https://api.liberiaschoolhub.com',
-  SCHOOL_ADMIN_URL: 'https://liberiaschoolhub.com/schooladmin',
-  SUPER_ADMIN_URL: 'https://liberiaschoolhub.com/superadmin',
-  PARENT_PORTAL_URL: 'https://liberiaschoolhub.com/parent',
+  SCHOOL_ADMIN_URL: 'https://www.liberiaschoolhub.com/schooladmin',
+  SUPER_ADMIN_URL: 'https://www.liberiaschoolhub.com/superadmin',
+  PARENT_PORTAL_URL: 'https://www.liberiaschoolhub.com/parent',
   BRAND_NAME: 'Liberia School Hub',
   EMAIL_FROM: 'Liberia School Hub <no-reply@liberiaschoolhub.com>',
 };
