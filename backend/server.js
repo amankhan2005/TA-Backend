@@ -61,28 +61,11 @@ app.use(helmet());
 // ports — is centralised in config/brand.js so the domain lives in exactly
 // one place. Subpath apps (/parent, /schooladmin) collapse to one origin,
 // which is all the browser's Origin header carries.
-const allowedOrigins = brand.allowedOrigins();
-
-const corsOptions = {
-  origin(origin, callback) {
-    // Allow server-to-server / mobile app / Postman (no Origin header)
-    if (!origin) return callback(null, true);
-
-    if (allowedOrigins.includes(origin)) return callback(null, true);
-
-    return callback(new Error(`CORS blocked: ${origin} is not allowed`));
-  },
-
+ 
+ app.use(cors({
+  origin: true,
   credentials: true,
-
-  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-
-  allowedHeaders: ['Content-Type', 'Authorization'],
-};
-
-app.use(cors(corsOptions));
-app.options('*', cors(corsOptions));
-
+}));
 // ─────────────────────────────────────────────────────────────
 // Rate Limiting
 // ─────────────────────────────────────────────────────────────
