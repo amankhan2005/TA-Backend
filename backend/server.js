@@ -62,8 +62,24 @@ app.use(helmet());
 // one place. Subpath apps (/parent, /schooladmin) collapse to one origin,
 // which is all the browser's Origin header carries.
  
- app.use(cors({
-  origin: true,
+const allowedOrigins = [
+  'https://www.liberiaschoolhub.com',
+  'https://liberiaschoolhub.com',
+  'http://localhost:5173',
+  'http://localhost:5174',
+  'http://localhost:5175',
+];
+
+app.use(cors({
+  origin(origin, callback) {
+    if (!origin) return callback(null, true);
+
+    if (allowedOrigins.includes(origin)) {
+      return callback(null, true);
+    }
+
+    return callback(new Error(`CORS blocked: ${origin}`));
+  },
   credentials: true,
 }));
 // ─────────────────────────────────────────────────────────────
